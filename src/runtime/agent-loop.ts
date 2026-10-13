@@ -216,8 +216,20 @@ export async function runTurn(
   const messages: ChatMessage[] = [...history, { role: "user", content: userText }];
   const systemPrompt = buildSystemPrompt(deps.agent);
 
+  let empties = 0;
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const result = await sendToModel(deps, [{ role: "system", content: systemPrompt }, ...messages], tools);
+    // After two empty replies, nudge the model once more (the nudge is not kept in the history)
+    const nudge: ChatMessage[] = empties >= 2 ? [{ role: "user", content: "Please answer now, in words, using what you have so far." }] : [];
+    const result = await sendToModel(deps, [{ role: "system", content: systemPrompt }, ...messages, ...nudge], tools);
+
+    // Models occasionally return nothing at all (no text and no tool call). Ask again instead of showing a blank answer.
+    if (!result.text.trim() && result.toolCalls.length === 0) {
+      if (empties++ < 3) {
+        turn--;
+        continue;
+      }
+      throw new Error(`agent '${deps.agent.name}' kept returning an empty reply`);
+    }
 
     if (result.text) deps.onChunk?.(deps.agent.name, result.text);
 

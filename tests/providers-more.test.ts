@@ -279,3 +279,36 @@ describe("model fallbacks", () => {
     expect(msgs[0]).toMatch(/Agent 'b'.*fallback/);
   });
 });
+
+describe("empty model replies", () => {
+  const empty = () => new Response(JSON.stringify({ candidates: [{ content: { parts: [] }, finishReason: "STOP" }] }), { status: 200 });
+  const said = (text: string) => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
+  async function ask(responses: (() => Response)[]) {
+    const bodies: any[] = [];
+    let i = 0;
+    globalThis.fetch = (async (_u: any, init: any) => (bodies.push(JSON.parse(init.body)), responses[Math.min(i++, responses.length - 1)]())) as typeof fetch;
+    const out: string[] = [];
+    const io: IonIO = { say: (t) => void out.push(t), note: () => {}, readLine: async () => null, confirm: async () => true };
+    await new Interpreter({ io }).runSource('agent a:\n    model "gemini/gemini-2.5-flash"\n    key "k"\nsay ask a "hi"');
+    return { out, bodies };
+  }
+
+  it("asks again when the model returns nothing, instead of showing a blank answer", async () => {
+    const { out, bodies } = await ask([empty, () => said("Here you go")]);
+    expect(out).toEqual(["Here you go"]);
+    expect(bodies).toHaveLength(2);
+  });
+
+  it("nudges the model after repeated empties, without keeping the nudge in the conversation", async () => {
+    const { out, bodies } = await ask([empty, empty, () => said("Finally")]);
+    expect(out).toEqual(["Finally"]);
+    expect(bodies).toHaveLength(3);
+    const lastText = (b: any) => b.contents.at(-1).parts[0].text;
+    expect(lastText(bodies[2])).toMatch(/answer now, in words/);
+    expect(lastText(bodies[1])).toBe("hi");
+  });
+
+  it("gives up with a clear error if it never answers", async () => {
+    await expect(ask([empty])).rejects.toThrow(/kept returning an empty reply/);
+  });
+});
