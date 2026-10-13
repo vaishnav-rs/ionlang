@@ -1,0 +1,20 @@
+# dependencies and build output
+node_modules/
+dist/
+
+# secrets: never commit API keys
+.env
+.env.*
+
+# logs and local files
+*.log
+.claude/settings.local.json
+
+# generated (rebuild with `npm run guide` / `graphify update .`)
+graphify-out/
+guide/Ion-Guide.html
+
+# files that example programs write
+digest.txt
+notes.txt
+reports/

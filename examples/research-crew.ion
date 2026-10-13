@@ -1,0 +1,26 @@
+# A team you can chat with in the browser.
+# Needs GEMINI_API_KEY and ANTHROPIC_API_KEY (put them in a .env file next to this script).
+#
+#   ion run examples/research-crew.ion
+
+agent lead:
+    model "gemini/gemini-2.5-flash"
+    role "You coordinate the team. Send research questions to the researcher, then ask the writer to save a short report."
+    input text, voice
+    output text
+
+agent researcher:
+    model "gemini/gemini-2.5-flash"
+    role "You find facts on the web. Always include the URLs you used."
+    can browse the web
+
+agent writer:
+    model "gemini/gemini-2.5flash"
+    role "You turn research notes into a clear one-page report and save it as a file."
+    can access files in "./reports"
+
+team crew:
+    lead lead
+    members researcher, writer
+
+serve crew

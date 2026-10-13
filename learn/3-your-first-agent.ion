@@ -1,0 +1,17 @@
+# LESSON 3: agents.  "mock" is a pretend AI that needs no key, so you can learn first.
+
+agent buddy:
+    model "mock"
+    role "You are a friendly assistant."
+
+say ask buddy "hello there"
+say ask buddy "do you remember me?"
+
+# Swap the model line for a real one when you have a key in a .env file:
+#     model "gemini/gemini-2.5-flash"
+# and the same program talks to a real AI.
+
+# YOUR TURN
+# 1. Make a second agent called "pal" and ask it something.
+# 2. Put the question in a variable:   set q to "hi"   then   ask buddy q
+# 3. Ask both agents at once:   say ask_all([buddy, pal], "hi")

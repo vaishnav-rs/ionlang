@@ -1,0 +1,13 @@
+# Your first Ion program. Run it with:  npx tsx src/cli/index.ts run examples/hello.ion
+agent buddy:
+    model "mock"
+    role "You are a friendly assistant."
+
+set name to "world"
+say "Hello, {name}!"
+
+set reply to ask buddy "Say hi to {name}"
+say reply
+
+repeat 3 times:
+    say "Ion is easy"

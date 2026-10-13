@@ -1,0 +1,8 @@
+ion init
+type == single
+agentdef assistant{
+ai-provider == openai
+ai-apikey == env:OPENAI_API_KEY
+grant file-access 'C:/Users/vaish/Desktop/ion-test'
+input == text
+output == text}

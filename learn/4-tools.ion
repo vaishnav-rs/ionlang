@@ -1,0 +1,17 @@
+# LESSON 4: tools are functions that an agent can choose to call.
+# (The mock AI calls a tool when you write:  CALL tool_name {"arg": "value"})
+
+tool shout(text):
+    describe "Makes text LOUD"
+    give back upper(text) + "!"
+
+agent echo:
+    model "mock"
+    can use shout
+
+say ask echo 'CALL shout {"text": "tools give agents powers"}'
+
+# YOUR TURN
+# 1. Write a tool called  word_count(text)  that gives back length(split(text)).
+# 2. Let echo use both tools:   can use shout, word_count
+# 3. Call your tool directly too:   say word_count("one two three")

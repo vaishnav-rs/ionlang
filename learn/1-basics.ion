@@ -1,0 +1,20 @@
+# LESSON 1: say, set, and decisions.   Run:  npx tsx src/cli/index.ts run learn/1-basics.ion
+
+set name to "Ada"
+set age to 36
+say "Hello, {name}! Next year you'll be {age + 1}."
+
+if age is at least 18:
+    say "{name} is an adult"
+otherwise:
+    say "{name} is a minor"
+
+set fruits to ["apple", "pear", "plum"]
+add "fig" to fruits
+for each fruit in fruits:
+    say "I like {fruit}"
+
+# YOUR TURN
+# 1. Change the age to 10 and run it again. What changes?
+# 2. Add a fruit of your own.
+# 3. Make it say "big list" only if there are more than 3 fruits (hint: length(fruits)).

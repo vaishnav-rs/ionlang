@@ -1,0 +1,27 @@
+# LESSON 2: functions and loops.
+
+to greet(person):
+    give back "Hello, " + person + "!"
+
+say greet("Ada")
+
+to total(numbers):
+    set sum_so_far to 0
+    for each n in numbers:
+        set sum_so_far to sum_so_far + n
+    give back sum_so_far
+
+say total([1, 2, 3, 4])
+
+repeat 3 times:
+    say "again"
+
+try:
+    say 10 / 0
+on error:
+    say "Oops: {error}"
+
+# YOUR TURN
+# 1. Write a function  to double(n)  that gives back n * 2, and say double(21).
+# 2. Write  to biggest(numbers)  that finds the largest number using a loop.
+#    (Then check your answer against the built-in max(numbers).)

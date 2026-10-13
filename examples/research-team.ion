@@ -1,0 +1,16 @@
+ion init
+type == team
+
+agentdef orchestrator{
+ai-provider == gemini
+ai-apikey == env:GEMINI_API_KEY
+ai-model == gemini/gemini-2.5-flash
+grant orchestration-powers
+input == text, voice
+output == text}
+
+agentdef researcher{
+ai-provider == openai
+ai-apikey == env:OPENAI_API_KEY
+grant web-browsing
+grant file-access 'C:/Users/vaish'}

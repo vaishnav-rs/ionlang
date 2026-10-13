@@ -1,0 +1,35 @@
+# A script, not a server: loops, functions, tools and agents working together.
+# Needs OPENAI_API_KEY.
+
+tool word_count(text):
+    describe "Counts the words in some text"
+    give back length(split(text))
+
+agent summarizer:
+    model "openai/gpt-4o-mini"
+    role "Summarize the text you are given in two short sentences."
+    can use word_count
+    forgets between asks
+
+to shorten(text, limit):
+    if length(text) is at most limit:
+        give back text
+    give back slice(text, 0, limit) + "..."
+
+set articles to [
+    "Ion is a language for building AI agents in plain English.",
+    "Agents can browse the web, read files, and work together in teams."
+]
+
+set summaries to []
+for each article in articles:
+    try:
+        add ask summarizer "Summarize: {article}" to summaries
+    on error:
+        add "(failed: {error})" to summaries
+
+for each summary in summaries:
+    say "- " + shorten(summary, 80)
+
+write_file("digest.txt", join(summaries, "\n"))
+say "Saved {length(summaries)} summaries to digest.txt"

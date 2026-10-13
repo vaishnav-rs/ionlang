@@ -1,0 +1,29 @@
+{
+  "name": "ion",
+  "version": "0.1.0",
+  "description": "Ion: a plain-English programming language with AI agents built in.",
+  "type": "module",
+  "bin": {
+    "ion": "./dist/cli/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/runtime/webui','dist/runtime/webui',{recursive:true})\"",
+    "dev": "tsx src/cli/index.ts",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "guide": "tsx scripts/verify-guide.ts && node scripts/build-guide.mjs",
+    "preview": "tsx src/cli/index.ts preview"
+  },
+  "dependencies": {
+    "commander": "^12.1.0",
+    "playwright": "^1.47.0",
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.7.0",
+    "@types/ws": "^8.5.12",
+    "typescript": "^5.6.0",
+    "tsx": "^4.19.0",
+    "vitest": "^2.1.0"
+  }
+}

@@ -1,0 +1,39 @@
+# One program, many AI providers. `ion check examples/providers.ion` validates it without any keys.
+# Each provider reads its own key from the environment (or a .env file):
+#   GEMINI_API_KEY  OPENAI_API_KEY  ANTHROPIC_API_KEY  OPENROUTER_API_KEY  GROQ_API_KEY  CEREBRAS_API_KEY
+
+agent gemini_a:
+    model "gemini/gemini-2.5-flash"
+
+agent openai_a:
+    model "openai/gpt-4o-mini"
+
+agent anthropic_a:
+    model "anthropic/claude-sonnet-5"
+
+# OpenRouter: one key, hundreds of models. Everything after "openrouter/" is the model id.
+agent router_a:
+    model "openrouter/anthropic/claude-3.5-sonnet"
+
+# Groq and Cerebras: very fast open models.
+agent groq_a:
+    model "groq/llama-3.3-70b-versatile"
+
+agent cerebras_a:
+    model "cerebras/llama-3.3-70b"
+
+# Custom: any server that speaks the OpenAI API (Ollama, LM Studio, vLLM, a company gateway...).
+# A local model needs no key.
+agent local_a:
+    model "custom/llama3"
+    endpoint "http://localhost:11434/v1/chat/completions"
+
+# Custom with a key in a header of your choosing, and a different API format.
+agent gateway_a:
+    model "custom/my-model"
+    endpoint "https://gateway.example.com/v1/messages"
+    format anthropic          # openai (default), anthropic, or raw
+    header "X-Api-Key"        # where the key goes (default: Authorization, or x-api-key for anthropic)
+    key from env "GATEWAY_KEY"
+
+say ask_all([gemini_a, groq_a, cerebras_a], "In one sentence: what is a black hole?")

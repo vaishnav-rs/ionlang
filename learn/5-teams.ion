@@ -1,0 +1,22 @@
+# LESSON 5: teams. A lead delegates to members.
+
+agent boss:
+    model "mock"
+agent writer:
+    model "mock"
+agent checker:
+    model "mock"
+
+team crew:
+    lead boss
+    members writer, checker
+
+say ask crew 'CALL delegate_to_writer {"task": "write a haiku"}'
+
+# See it in a chat page (open http://localhost:4310, Ctrl+C to stop):
+#     serve crew
+
+# YOUR TURN
+# 1. Run it, then uncomment "serve crew" and watch the activity timeline in the browser.
+# 2. Add a third member and make the boss delegate to it.
+# 3. Give "checker" a tool, then delegate to it.

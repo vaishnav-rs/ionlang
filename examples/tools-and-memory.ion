@@ -1,0 +1,13 @@
+# Works offline with the built-in "mock" model, so you can try it without any API key.
+#   ion run examples/tools-and-memory.ion
+
+tool shout(text):
+    describe "Makes text LOUD"
+    give back upper(text) + "!"
+
+agent echo:
+    model "mock"
+    can use shout
+
+say ask echo "hello"
+say ask echo 'CALL shout {"text": "agents can call tools you write"}'

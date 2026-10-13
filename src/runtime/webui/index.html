@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="color-scheme" content="light dark" />
+  <title>Ion</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23C15F3C'/%3E%3Cpath d='M16 6l2.6 7.4L26 16l-7.4 2.6L16 26l-2.6-7.4L6 16l7.4-2.6z' fill='white'/%3E%3C/svg%3E" />
+  <link rel="stylesheet" href="/style.css" />
+  <script>
+    // Apply the saved theme before first paint so there is no flash.
+    try { var t = localStorage.getItem("ion.theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+  <a class="skip" href="#composer-input">Skip to message box</a>
+
+  <div id="app">
+    <aside id="sidebar" aria-label="Team">
+      <div class="side-head">
+        <span class="logo" aria-hidden="true"></span>
+        <div class="side-title">
+          <strong>Ion</strong>
+          <span id="side-sub">Connecting…</span>
+        </div>
+      </div>
+
+      <button id="new-chat" class="btn-primary-soft" type="button">
+        <span data-icon="plus"></span> New chat
+      </button>
+
+      <nav class="side-section" aria-labelledby="team-h">
+        <h2 id="team-h">Team</h2>
+        <ul id="roster"></ul>
+      </nav>
+
+      <div class="side-foot">
+        <button id="theme-btn" class="ghost" type="button" title="Switch theme"><span data-icon="sun"></span><span id="theme-label">Auto</span></button>
+        <button id="palette-btn" class="ghost" type="button" title="Command menu (Ctrl+K)"><span data-icon="search"></span><kbd>Ctrl K</kbd></button>
+      </div>
+    </aside>
+    <div id="scrim"></div>
+
+    <main id="main">
+      <header id="topbar">
+        <button id="menu-btn" class="icon-btn mobile-only" type="button" aria-label="Open team panel"><span data-icon="menu"></span></button>
+        <div class="title">
+          <h1 id="title">Ion</h1>
+          <span id="conn" class="pill" data-state="connecting"><i></i><span id="conn-text">Connecting</span></span>
+        </div>
+        <div class="top-actions">
+          <button id="speak-toggle" class="icon-btn" type="button" aria-pressed="false" title="Read replies aloud" hidden><span data-icon="volume"></span></button>
+          <button id="collapse-btn" class="icon-btn" type="button" title="Expand or collapse all activity"><span data-icon="layers"></span></button>
+          <button id="export-btn" class="icon-btn" type="button" title="Export chat as Markdown"><span data-icon="download"></span></button>
+        </div>
+      </header>
+
+      <div id="scroller" tabindex="-1">
+        <div id="thread" role="log" aria-live="polite" aria-relevant="additions"></div>
+
+        <section id="empty" aria-labelledby="empty-h">
+          <span class="logo big" aria-hidden="true"></span>
+          <h2 id="empty-h">How can <span id="empty-name">I</span> help?</h2>
+          <p id="empty-sub">Ask anything. The team will pick it up and ask before doing anything risky.</p>
+          <div id="suggestions"></div>
+        </section>
+      </div>
+
+      <button id="jump" type="button" hidden><span data-icon="arrow-down"></span> Latest</button>
+
+      <footer id="composer-zone">
+        <div id="mentions" role="listbox" aria-label="Mention an agent" hidden></div>
+        <form id="composer" autocomplete="off">
+          <label class="sr" for="composer-input">Message</label>
+          <textarea id="composer-input" rows="1" placeholder="Message the team…" enterkeyhint="send"></textarea>
+          <div class="composer-row">
+            <span id="composer-hint">Enter to send · Shift+Enter for a new line · @ to address someone</span>
+            <div class="composer-btns">
+              <button id="mic-btn" class="icon-btn" type="button" aria-label="Dictate" title="Dictate" hidden><span data-icon="mic"></span></button>
+              <button id="send-btn" class="send" type="submit" aria-label="Send message" disabled><span data-icon="arrow-up"></span></button>
+            </div>
+          </div>
+        </form>
+      </footer>
+    </main>
+  </div>
+
+  <div id="palette" hidden>
+    <div class="palette-box" role="dialog" aria-modal="true" aria-label="Command menu">
+      <input id="palette-input" type="text" placeholder="Type a command…" aria-label="Command" autocomplete="off" />
+      <ul id="palette-list" role="listbox"></ul>
+    </div>
+  </div>
+
+  <dialog id="help">
+    <h2>Keyboard shortcuts</h2>
+    <dl>
+      <dt><kbd>Enter</kbd></dt><dd>Send message</dd>
+      <dt><kbd>Shift</kbd> <kbd>Enter</kbd></dt><dd>New line</dd>
+      <dt><kbd>@</kbd></dt><dd>Address a specific agent</dd>
+      <dt><kbd>/</kbd></dt><dd>Focus the message box</dd>
+      <dt><kbd>Ctrl</kbd> <kbd>K</kbd></dt><dd>Command menu</dd>
+      <dt><kbd>Y</kbd> / <kbd>N</kbd></dt><dd>Allow / deny a permission request</dd>
+      <dt><kbd>Esc</kbd></dt><dd>Close menus, stop dictation</dd>
+    </dl>
+    <form method="dialog"><button class="btn-primary-soft">Close</button></form>
+  </dialog>
+
+  <div id="toasts" aria-live="polite"></div>
+  <script type="module" src="/client.js"></script>
+</body>
+</html>
