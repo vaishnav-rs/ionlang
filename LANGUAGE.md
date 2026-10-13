@@ -236,6 +236,21 @@ serve dev on port 5000
 
 `ion run file.ion --headless` serves the API only (no page, no browser). Send `POST /message` with `{"text": "hello"}` and get `{"result": "..."}`, or connect a WebSocket to `/stream` for live updates. The web page has a microphone button when the agent declares `input text, voice`.
 
+## Talking to the web and the world
+
+`fetch(url)` gets a page. For anything else (headers, logins, POST, JSON) use `http`:
+
+```
+set reply to http("POST", "https://api.example.com/items", {bearer: env("TOKEN"), body: {name: "pen"}})
+if not reply.ok:
+    fail("The server said {reply.status}")
+say reply.json.id
+```
+
+It gives back `{status, ok, text, json, headers}` and does not throw on 4xx/5xx, so you decide what a failure means. Other helpers: `base64_encode`, `base64_decode`, `url_encode`, `regex_replace`, `fail("message")`, `load_env("../keys.env")`, and dates: `now_local()`, `timezone()`, `weekday("2026-10-13")`, `add_days("2026-10-31", 1)`, `day_start("2026-10-13")`.
+
+Text escapes: `\n` and `\t` mean newline and tab; any other backslash is kept as written, so a pattern like `"\s+"` works as is.
+
 ## 11. Splitting code across files
 
 ```

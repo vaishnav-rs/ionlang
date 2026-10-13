@@ -533,3 +533,27 @@ say d.json
     }
   });
 });
+
+describe("fail and regex_replace", () => {
+  it("fail raises an error you can catch, with your own message", async () => {
+    const r = await run(`
+to checked(n):
+    if n is less than 0:
+        fail("negative numbers are not allowed: {n}")
+    give back n
+try:
+    say checked(-5)
+on error:
+    say "caught: " + error
+say checked(3)
+`);
+    expect(r.out).toEqual(["caught: negative numbers are not allowed: -5", "3"]);
+    expect((await err('fail("boom")')).message).toBe("boom");
+  });
+
+  it("regex_replace replaces every match", async () => {
+    const r = await run(`say regex_replace("<p>Hi <b>there</b></p>", "<[^>]+>", "")\nsay regex_replace("a  b   c", "\\s+", " ")`);
+    expect(r.out).toEqual(["Hi there", "a b c"]);
+    expect((await err('say regex_replace("x", "(", "")')).message).toMatch(/valid pattern/);
+  });
+});

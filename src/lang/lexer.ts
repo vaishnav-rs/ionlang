@@ -198,7 +198,10 @@ function processString(raw: string, line: number): StrPart[] {
       j++;
       if (nx === "n") buf += "\n";
       else if (nx === "t") buf += "\t";
-      else if (nx !== undefined) buf += nx;
+      else if (nx === undefined) buf += "\\";
+      // these escapes drop the backslash; any other keeps it, so patterns like "\s+" just work
+      else if (nx === '"' || nx === "'" || nx === "\\" || nx === "{" || nx === "}") buf += nx;
+      else buf += "\\" + nx;
       continue;
     }
     if (ch === "{" && isLetter(raw[j + 1])) {

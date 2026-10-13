@@ -166,6 +166,22 @@ export function installBuiltins(env: Env): void {
   });
   def("to_json", (a) => (arity("to_json", a, 1, 2), toJson(a[0], a.length === 2 && truthy(a[1]))));
 
+  // ---- errors, patterns ----
+  def("fail", (a) => {
+    arity("fail", a, 1);
+    throw new IonError(toText(a[0]));
+  });
+  def("regex_replace", (a) => {
+    arity("regex_replace", a, 3);
+    let re: RegExp;
+    try {
+      re = new RegExp(str("regex_replace", a, 1), "g");
+    } catch (e) {
+      throw new IonError(`That isn't a valid pattern: ${(e as Error).message}`);
+    }
+    return str("regex_replace", a, 0).replace(re, str("regex_replace", a, 2));
+  });
+
   // ---- http, encoding ----
   def("http", async (a) => {
     arity("http", a, 2, 3);
