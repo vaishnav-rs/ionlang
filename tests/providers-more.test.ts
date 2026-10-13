@@ -407,3 +407,42 @@ say ask c "3"`);
     expect(urls).toHaveLength(3);
   });
 });
+
+describe("Gemini request format for tool use", () => {
+  it("sends tool results as one user message per round, and echoes thought signatures back", async () => {
+    const { gemini } = await import("../src/runtime/providers/gemini.js");
+    const bodies: any[] = [];
+    globalThis.fetch = (async (_u: any, init: any) => {
+      bodies.push(JSON.parse(init.body));
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "done" }] } }] }), { status: 200 });
+    }) as typeof fetch;
+    await gemini.sendMessage({
+      apiKey: "k",
+      messages: [
+        { role: "system", content: "sys" },
+        { role: "user", content: "go" },
+        { role: "assistant", content: "", toolCalls: [
+          { id: "a-0", name: "a", arguments: { x: 1 }, thoughtSignature: "SIG-1" },
+          { id: "b-1", name: "b", arguments: {} }
+        ] },
+        { role: "tool", content: "ra", toolCallId: "a-0", toolName: "a" },
+        { role: "tool", content: "rb", toolCallId: "b-1", toolName: "b" }
+      ]
+    });
+    const c = bodies[0].contents;
+    expect(c.map((x: any) => x.role)).toEqual(["user", "model", "user"]); // no "function" role anywhere
+    expect(c[1].parts[0]).toEqual({ functionCall: { name: "a", args: { x: 1 } }, thoughtSignature: "SIG-1" });
+    expect(c[1].parts[1]).toEqual({ functionCall: { name: "b", args: {} } });
+    expect(c[2].parts).toEqual([
+      { functionResponse: { name: "a", response: { result: "ra" } } },
+      { functionResponse: { name: "b", response: { result: "rb" } } }
+    ]);
+  });
+
+  it("captures the thought signature a model sends with a tool call", async () => {
+    const { gemini } = await import("../src/runtime/providers/gemini.js");
+    globalThis.fetch = (async () => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ functionCall: { name: "t", args: {} }, thoughtSignature: "SIG-9" }] } }] }), { status: 200 })) as typeof fetch;
+    const r = await gemini.sendMessage({ apiKey: "k", messages: [{ role: "user", content: "x" }] });
+    expect(r.toolCalls[0]).toMatchObject({ name: "t", thoughtSignature: "SIG-9" });
+  });
+});

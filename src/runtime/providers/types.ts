@@ -20,6 +20,8 @@ export interface ToolCall {
   id: string;
   name: string;
   arguments: Record<string, unknown>;
+  /** Gemini 3 attaches one to each tool call and requires it back on the next request. */
+  thoughtSignature?: string;
 }
 
 export interface SendMessageRequest {

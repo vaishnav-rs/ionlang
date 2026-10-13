@@ -11,33 +11,29 @@ export const gemini: ProviderAdapter = {
     const systemMessages = req.messages.filter((m) => m.role === "system");
     const conversational = req.messages.filter((m) => m.role !== "system");
 
-    const contents = conversational.map((m) => {
+    const contents: any[] = [];
+    for (const m of conversational) {
       if (m.role === "tool") {
-        return {
-          role: "function",
-          parts: [
-            {
-              functionResponse: {
-                name: m.toolName,
-                response: { result: m.content }
-              }
-            }
-          ]
-        };
+        const part = { functionResponse: { name: m.toolName, response: { result: m.content } } };
+        const last = contents[contents.length - 1];
+        // every answer to one round of tool calls travels together, in a single "user" message
+        if (last && last.role === "user" && last.parts.every((p: any) => p.functionResponse)) last.parts.push(part);
+        else contents.push({ role: "user", parts: [part] });
+      } else if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
+        const parts: any[] = [];
+        if (m.content) parts.push({ text: m.content });
+        for (const tc of m.toolCalls) {
+          parts.push({
+            functionCall: { name: tc.name, args: tc.arguments },
+            // Gemini 3 models require the "thought signature" they sent with a tool call to be sent back
+            ...(tc.thoughtSignature ? { thoughtSignature: tc.thoughtSignature } : {})
+          });
+        }
+        contents.push({ role: "model", parts });
+      } else {
+        contents.push({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] });
       }
-      if (m.role === "assistant" && m.toolCalls && m.toolCalls.length > 0) {
-        return {
-          role: "model",
-          parts: m.toolCalls.map((tc) => ({
-            functionCall: { name: tc.name, args: tc.arguments }
-          }))
-        };
-      }
-      return {
-        role: m.role === "assistant" ? "model" : "user",
-        parts: [{ text: m.content }]
-      };
-    });
+    }
 
     const body: Record<string, unknown> = { contents };
 
@@ -84,7 +80,8 @@ export const gemini: ProviderAdapter = {
         toolCalls.push({
           id: `${part.functionCall.name}-${callIndex++}`,
           name: part.functionCall.name,
-          arguments: part.functionCall.args ?? {}
+          arguments: part.functionCall.args ?? {},
+          ...(part.thoughtSignature ? { thoughtSignature: part.thoughtSignature } : {})
         });
       }
     }
