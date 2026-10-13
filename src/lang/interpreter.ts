@@ -423,6 +423,7 @@ export class Interpreter {
   private ctx(line: number): BuiltinCtx {
     return {
       line,
+      baseDir: this.fileStack.length ? path.dirname(this.fileStack[this.fileStack.length - 1]) : process.cwd(),
       call: (fn, args) => {
         if (!(fn instanceof IonFunction || fn instanceof Builtin)) throw new IonError(`${typeName(fn)} isn't a function.`, line);
         return this.callFunction(fn, args, line);

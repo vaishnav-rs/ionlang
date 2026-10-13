@@ -151,3 +151,64 @@ serve boss
     expect(events.at(-1).type).toBe("final");
   });
 });
+
+describe("server hardening: hostile web pages and DNS rebinding", () => {
+  const port = 4391;
+  let close: () => Promise<void>;
+  const base = `http://127.0.0.1:${port}`;
+
+  beforeAll(async () => {
+    let program: ProgramConfig | undefined;
+    await new Interpreter({
+      io: { say() {}, note() {}, readLine: async () => null, confirm: async () => true },
+      serve: async (p) => { program = p; }
+    }).runSource('agent a:\n    model "mock"\nserve a');
+    close = startServer({ program: program!, port, headless: false, autoYes: true, allowedOrigins: ["http://localhost:5173"] }).close;
+  });
+  afterAll(async () => close());
+
+  const post = (origin?: string) =>
+    fetch(`${base}/message`, {
+      method: "POST",
+      headers: { "Content-Type": "text/plain", ...(origin ? { Origin: origin } : {}) },
+      body: JSON.stringify({ text: "hi" })
+    });
+
+  it("refuses a request from another website, but allows tools that send no Origin", async () => {
+    expect((await post("https://evil.example")).status).toBe(403);
+    expect((await post("http://localhost:9999")).status).toBe(403); // right host, wrong port
+    expect((await post("null")).status).toBe(403);
+    expect((await post()).status).toBe(200);
+  });
+
+  it("allows the server's own page and origins you opted into", async () => {
+    expect((await post(base)).status).toBe(200);
+    expect((await post("http://localhost:5173")).status).toBe(200);
+  });
+
+  it("refuses a WebSocket handshake from another website", async () => {
+    const result = await new Promise<string>((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/stream`, { headers: { Origin: "https://evil.example" } });
+      ws.on("open", () => { ws.close(); resolve("opened"); });
+      ws.on("error", (e) => resolve(`blocked: ${e.message}`));
+      ws.on("unexpected-response", (_req, res) => resolve(`blocked: ${res.statusCode}`));
+    });
+    expect(result).toMatch(/^blocked/);
+    const ok = await new Promise<string>((resolve) => {
+      const ws = new WebSocket(`ws://127.0.0.1:${port}/stream`);
+      ws.on("open", () => { ws.close(); resolve("opened"); });
+      ws.on("error", (e) => resolve(`blocked: ${e.message}`));
+    });
+    expect(ok).toBe("opened");
+  });
+
+  it("refuses a Host header that isn't localhost (DNS rebinding)", async () => {
+    const http = await import("node:http");
+    const status = await new Promise<number>((resolve, reject) => {
+      const req = http.request({ host: "127.0.0.1", port, path: "/agents", headers: { Host: `attacker.example:${port}` } }, (res) => { res.resume(); resolve(res.statusCode!); });
+      req.on("error", reject);
+      req.end();
+    });
+    expect(status).toBe(421);
+  });
+});

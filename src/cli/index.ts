@@ -54,8 +54,8 @@ function openBrowser(url: string): void {
 }
 
 /** Start the chat/API server and block until Ctrl+C. */
-function serveUntilStopped(config: ProgramConfig, port: number, headless: boolean, autoYes: boolean, open = true): Promise<void> {
-  const { close } = startServer({ program: config, port, headless, autoYes });
+function serveUntilStopped(config: ProgramConfig, port: number, headless: boolean, autoYes: boolean, open = true, allowedOrigins: string[] = []): Promise<void> {
+  const { close } = startServer({ program: config, port, headless, autoYes, allowedOrigins });
   console.log(`ion: serving on http://localhost:${port}`);
   if (headless) console.log("ion: headless mode. POST {\"text\": \"...\"} to /message, or connect to /stream.");
   else if (open) openBrowser(`http://localhost:${port}`);
@@ -75,7 +75,8 @@ program
   .option("--headless", "with 'serve': API only, no web UI and no browser", false)
   .option("--port <n>", "port to use for 'serve' (overrides the script)")
   .option("--yes", "auto-approve every permission prompt", false)
-  .action(async (file: string, options: { headless: boolean; port?: string; yes: boolean }) => {
+  .option("--allow-origin <origin...>", "let a web page at this origin (like http://localhost:5173) call the API")
+  .action(async (file: string, options: { headless: boolean; port?: string; yes: boolean; allowOrigin?: string[] }) => {
     const source = readSource(file);
     if (source === undefined) return;
     loadDotEnv([path.dirname(path.resolve(file)), process.cwd()]);
@@ -89,7 +90,7 @@ program
         file,
         autoYes: options.yes,
         serve: (config, port) =>
-          serveUntilStopped(config, options.port ? parseInt(options.port, 10) : port, options.headless, options.yes)
+          serveUntilStopped(config, options.port ? parseInt(options.port, 10) : port, options.headless, options.yes, true, options.allowOrigin ?? [])
       });
       await interp.runSource(source);
     } catch (err) {

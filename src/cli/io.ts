@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import * as readline from "node:readline";
 import { IonIO } from "../lang/interpreter.js";
+import { loadEnvFile } from "../runtime/env.js";
 
 /** One shared stdin reader so `ask user`, `chat with` and permission prompts
  *  never fight over the same stream (also works with piped input). */
@@ -55,12 +56,7 @@ export function loadDotEnv(dirs: string[]): void {
   for (const dir of dirs) {
     const file = path.join(dir, ".env");
     if (!fs.existsSync(file)) continue;
-    for (const raw of fs.readFileSync(file, "utf-8").split(/\r?\n/)) {
-      const m = raw.match(/^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*?)\s*$/);
-      if (!m || m[0].trimStart().startsWith("#")) continue;
-      const value = m[2].replace(/^(['"])(.*)\1$/, "$2");
-      if (process.env[m[1]] === undefined) process.env[m[1]] = value;
-    }
+    loadEnvFile(file);
     return;
   }
 }

@@ -449,3 +449,87 @@ describe("inline API keys", () => {
     expect(r.out).toEqual(["mock reply: ok"]);
   });
 });
+
+describe("http, encoding, time and env built-ins", () => {
+  it("encodes and decodes base64 and URLs (including URL-safe base64)", async () => {
+    const r = await run(`
+say base64_encode("héllo ✓")
+say base64_decode(base64_encode("héllo ✓"))
+say base64_decode("aGk_Pz8-")
+say url_encode("a b&c=d/é")
+`);
+    expect(r.out).toEqual(["aMOpbGxvIOKckw==", "héllo ✓", "hi???>", "a%20b%26c%3Dd%2F%C3%A9"]);
+  });
+
+  it("date helpers", async () => {
+    const r = await run(`
+say weekday("2026-10-13")
+say add_days("2026-10-31", 1)
+say add_days("2026-03-01", -1)
+say day_start("2026-10-13") starts with "2026-10-13T00:00:00"
+say length(now_local()) is 25
+say type_of(timezone())
+say time() is greater than 1700000000
+`);
+    expect(r.out).toEqual(["Tuesday", "2026-11-01", "2026-02-28", "yes", "yes", "text", "yes"]);
+  });
+
+  it("load_env reads .env and .properties files without overriding or leaking values", async () => {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ion-env-"));
+    fs.writeFileSync(path.join(dir, "a.properties"), "# comment\nsdk.dir=C\:\\x\nION_T_ONE=1\nexport ION_T_TWO='two words'\nION_T_KEEP=file\n");
+    process.env.ION_T_KEEP = "shell";
+    try {
+      const r = await run(`say load_env(${JSON.stringify(path.join(dir, "a.properties"))})\nsay env("ION_T_ONE")\nsay env("ION_T_TWO")\nsay env("ION_T_KEEP")`);
+      expect(r.out).toEqual(["2", "1", "two words", "shell"]);
+      const e = await err('say load_env("/definitely/not/here.env")');
+      expect(e.message).toMatch(/couldn't read/);
+    } finally {
+      delete process.env.ION_T_ONE; delete process.env.ION_T_TWO; delete process.env.ION_T_KEEP;
+    }
+  });
+
+  it("http: methods, headers, bearer, query, JSON and form bodies, parsed JSON, non-2xx without throwing", async () => {
+    const http = await import("node:http");
+    const seen: any[] = [];
+    const srv = http.createServer((req, res) => {
+      let body = "";
+      req.on("data", (c) => (body += c));
+      req.on("end", () => {
+        seen.push({ method: req.method, url: req.url, auth: req.headers.authorization, ct: req.headers["content-type"], x: req.headers["x-test"], body });
+        if (req.url!.startsWith("/missing")) { res.writeHead(404); res.end("nope"); return; }
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ hello: "world", n: [1, 2] }));
+      });
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+    try {
+      const r = await run(`
+set a to http("GET", "${base}/x", {query: {q: "a b", n: 2}, headers: {"X-Test": "yes"}, bearer: "tok"})
+say a.status
+say a.ok
+say a.json.hello + " " + a.json.n[1]
+set b to http("POST", "${base}/y", {body: {k: "v"}})
+say b.status
+set c to http("POST", "${base}/z", {form: {grant_type: "refresh_token", code: "a b"}})
+say c.json.hello
+set d to http("GET", "${base}/missing")
+say d.status
+say d.ok
+say d.text
+say d.json
+`);
+      expect(r.out).toEqual(["200", "yes", "world 2", "200", "world", "404", "no", "nope", "nothing"]);
+      expect(seen[0]).toMatchObject({ method: "GET", url: "/x?q=a+b&n=2", auth: "Bearer tok", x: "yes" });
+      expect(seen[1]).toMatchObject({ method: "POST", ct: "application/json", body: '{"k":"v"}' });
+      expect(seen[2]).toMatchObject({ ct: "application/x-www-form-urlencoded", body: "grant_type=refresh_token&code=a+b" });
+      expect((await err('http("GET", "http://127.0.0.1:1/nothing-listens")')).message).toMatch(/couldn't reach/);
+      expect((await err('http("GET", "http://x", {nope: 1})')).message).toMatch(/doesn't know the option 'nope'/);
+    } finally {
+      srv.close();
+    }
+  });
+});

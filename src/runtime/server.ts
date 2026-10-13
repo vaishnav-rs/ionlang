@@ -17,6 +17,32 @@ export interface ServerOptions {
   port: number;
   headless: boolean;
   autoYes: boolean;
+  /** Extra browser origins (like "http://localhost:5173") allowed to call the API. */
+  allowedOrigins?: string[];
+}
+
+const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
+
+/** Only requests addressed to this computer are served (blocks DNS-rebinding attacks). */
+export function hostAllowed(hostHeader: string | undefined): boolean {
+  const m = hostHeader?.match(/^(\[[^\]]+\]|[^:]+)(?::\d+)?$/);
+  return !!m && LOCAL_HOSTS.has(m[1].toLowerCase());
+}
+
+/**
+ * Browsers attach an Origin header to cross-site requests and WebSocket handshakes. Without this
+ * check, any web page you visit could talk to your local agents. Programs that are not browsers
+ * (curl, Node, Python) send no Origin and are always allowed.
+ */
+export function originAllowed(origin: string | undefined, port: number, extra: string[] = []): boolean {
+  if (!origin) return true;
+  if (extra.includes(origin)) return true;
+  try {
+    const u = new URL(origin);
+    return LOCAL_HOSTS.has(u.hostname.toLowerCase()) && u.port === String(port);
+  } catch {
+    return false;
+  }
 }
 
 interface PendingConfirm {
@@ -38,6 +64,16 @@ export function startServer(opts: ServerOptions): { httpServer: http.Server; clo
   const pendingConfirms = new Map<string, PendingConfirm>();
 
   const httpServer = http.createServer(async (req, res) => {
+    if (!hostAllowed(req.headers.host)) {
+      res.writeHead(421, { "Content-Type": "text/plain" });
+      res.end("This server only answers requests addressed to localhost.");
+      return;
+    }
+    if (!originAllowed(req.headers.origin, opts.port, opts.allowedOrigins)) {
+      res.writeHead(403, { "Content-Type": "text/plain" });
+      res.end(`Origin ${req.headers.origin} is not allowed. Start Ion with --allow-origin to permit it.`);
+      return;
+    }
     if (req.method === "POST" && req.url === "/message") {
       await handleRestMessage(req, res, opts, sessions);
       return;
@@ -80,7 +116,12 @@ export function startServer(opts: ServerOptions): { httpServer: http.Server; clo
     handleStaticRequest(req, res);
   });
 
-  const wss = new WebSocketServer({ server: httpServer, path: "/stream" });
+  const wss = new WebSocketServer({
+    server: httpServer,
+    path: "/stream",
+    verifyClient: (info: { origin: string; req: http.IncomingMessage }) =>
+      hostAllowed(info.req.headers.host) && originAllowed(info.origin || undefined, opts.port, opts.allowedOrigins)
+  });
 
   wss.on("connection", (ws) => {
     const sessionId = randomUUID();

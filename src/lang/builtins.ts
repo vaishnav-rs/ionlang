@@ -1,7 +1,9 @@
 import * as fs from "node:fs";
+import * as path from "node:path";
+import { loadEnvFile } from "../runtime/env.js";
 import { IonError } from "./errors.js";
 import {
-  AgentRef, Builtin, BuiltinCtx, Env, fromJson, isEqual, isMap, toJson, toText, truthy, typeName
+  AgentRef, Builtin, BuiltinCtx, Env, fromJson, isEqual, isMap, newMap, toJson, toText, truthy, typeName
 } from "./values.js";
 
 type Fn = (args: unknown[], ctx: BuiltinCtx) => unknown | Promise<unknown>;
@@ -30,6 +32,31 @@ function arity(name: string, args: unknown[], min: number, max = min): void {
 
 const compare = (a: unknown, b: unknown): number =>
   typeof a === "number" && typeof b === "number" ? a - b : toText(a) < toText(b) ? -1 : toText(a) > toText(b) ? 1 : 0;
+
+const pad2 = (n: number) => String(n).padStart(2, "0");
+
+/** ISO-8601 time in the computer's own timezone, e.g. 2026-10-13T18:42:00+05:30 */
+function localIso(d: Date): string {
+  const off = -d.getTimezoneOffset();
+  const a = Math.abs(off);
+  return (
+    `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}T` +
+    `${pad2(d.getHours())}:${pad2(d.getMinutes())}:${pad2(d.getSeconds())}` +
+    `${off >= 0 ? "+" : "-"}${pad2(Math.floor(a / 60))}:${pad2(a % 60)}`
+  );
+}
+
+/** Local midnight of a `YYYY-MM-DD` date (anything after the date part is ignored). */
+function parseDay(name: string, s: string): Date {
+  const m = s.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!m) throw new IonError(`${name}() needs a date like 2026-10-13, but got ${JSON.stringify(s)}.`);
+  return new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+}
+
+function stringMap(name: string, v: unknown): Record<string, string> {
+  if (!isMap(v)) throw new IonError(`${name} must be a map like {key: "value"}, but got ${typeName(v)}.`);
+  return Object.fromEntries(Object.entries(v).map(([k, x]) => [k, toText(x)]));
+}
 
 export function installBuiltins(env: Env): void {
   const def = (name: string, fn: Fn) => env.define(name, new Builtin(name, fn));
@@ -139,10 +166,94 @@ export function installBuiltins(env: Env): void {
   });
   def("to_json", (a) => (arity("to_json", a, 1, 2), toJson(a[0], a.length === 2 && truthy(a[1]))));
 
+  // ---- http, encoding ----
+  def("http", async (a) => {
+    arity("http", a, 2, 3);
+    const method = str("http", a, 0).toUpperCase();
+    let url = str("http", a, 1);
+    const opts = a[2] ?? null;
+    if (opts !== null && !isMap(opts)) throw new IonError(`http() options must be a map, but got ${typeName(opts)}.`, 0, 'Like: http("POST", url, {headers: {...}, body: {...}})');
+    const o = (opts ?? {}) as Record<string, unknown>;
+    const known = ["headers", "query", "bearer", "body", "form", "timeout"];
+    for (const k of Object.keys(o)) {
+      if (!known.includes(k)) throw new IonError(`http() doesn't know the option '${k}'.`, 0, `Options: ${known.join(", ")}`);
+    }
+
+    const headers: Record<string, string> = o.headers === undefined ? {} : stringMap("headers", o.headers);
+    if (o.query !== undefined) {
+      const qs = new URLSearchParams(stringMap("query", o.query)).toString();
+      if (qs) url += (url.includes("?") ? "&" : "?") + qs;
+    }
+    if (o.bearer !== undefined) headers.Authorization = `Bearer ${toText(o.bearer)}`;
+
+    let body: string | undefined;
+    const hasHeader = (n: string) => Object.keys(headers).some((h) => h.toLowerCase() === n);
+    if (o.form !== undefined) {
+      body = new URLSearchParams(stringMap("form", o.form)).toString();
+      if (!hasHeader("content-type")) headers["Content-Type"] = "application/x-www-form-urlencoded";
+    } else if (o.body !== undefined) {
+      if (typeof o.body === "string") body = o.body;
+      else {
+        body = toJson(o.body);
+        if (!hasHeader("content-type")) headers["Content-Type"] = "application/json";
+      }
+    }
+    const seconds = o.timeout === undefined ? 30 : num("timeout", [o.timeout], 0);
+
+    let res: Response;
+    try {
+      res = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(seconds * 1000) });
+    } catch (e) {
+      const why = e instanceof Error && e.name === "TimeoutError" ? `it took longer than ${seconds} seconds` : (e as Error).message;
+      throw new IonError(`I couldn't reach ${url}: ${why}`);
+    }
+    const text = await res.text();
+    let json: unknown = null;
+    try { json = fromJson(JSON.parse(text)); } catch { /* not JSON */ }
+    const resHeaders = newMap();
+    res.headers.forEach((v, k) => { resHeaders[k] = v; });
+    const out = newMap();
+    out.status = res.status;
+    out.ok = res.ok;
+    out.text = text;
+    out.json = json;
+    out.headers = resHeaders;
+    return out;
+  });
+  def("url_encode", (a) => (arity("url_encode", a, 1), encodeURIComponent(toText(a[0]))));
+  def("base64_encode", (a) => (arity("base64_encode", a, 1), Buffer.from(toText(a[0]), "utf-8").toString("base64")));
+  def("base64_decode", (a) => {
+    arity("base64_decode", a, 1);
+    // accepts both standard and URL-safe base64 (Gmail uses the URL-safe kind)
+    return Buffer.from(str("base64_decode", a, 0).replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf-8");
+  });
+
+  // ---- time ----
+  def("time", () => Math.floor(Date.now() / 1000));
+  def("now_local", () => localIso(new Date()));
+  def("timezone", () => Intl.DateTimeFormat().resolvedOptions().timeZone);
+  def("weekday", (a) => (arity("weekday", a, 1), parseDay("weekday", str("weekday", a, 0)).toLocaleDateString("en-US", { weekday: "long" })));
+  def("add_days", (a) => {
+    arity("add_days", a, 2);
+    const d = parseDay("add_days", str("add_days", a, 0));
+    d.setDate(d.getDate() + num("add_days", a, 1));
+    return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+  });
+  def("day_start", (a) => (arity("day_start", a, 1), localIso(parseDay("day_start", str("day_start", a, 0)))));
+
   // ---- world ----
   def("now", () => new Date().toISOString());
   def("today", () => new Date().toISOString().slice(0, 10));
   def("env", (a) => (arity("env", a, 1), process.env[str("env", a, 0)] ?? null));
+  def("load_env", (a, ctx) => {
+    arity("load_env", a, 1);
+    const file = path.resolve(ctx.baseDir, str("load_env", a, 0));
+    try {
+      return loadEnvFile(file).length; // how many variables were newly set (values are never shown)
+    } catch (e) {
+      throw new IonError(`I couldn't read ${file}: ${(e as Error).message}`);
+    }
+  });
   def("sleep", (a) => new Promise((r) => setTimeout(() => r(null), num("sleep", a, 0) * 1000)));
   def("read_file", (a) => {
     arity("read_file", a, 1);

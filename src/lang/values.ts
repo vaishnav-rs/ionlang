@@ -31,6 +31,8 @@ export class Env {
 
 export interface BuiltinCtx {
   line: number;
+  /** Folder of the script being run, for resolving relative paths. */
+  baseDir: string;
   call(fn: unknown, args: unknown[]): Promise<unknown>;
   askAll(agents: unknown[], prompt: string): Promise<string[]>;
 }

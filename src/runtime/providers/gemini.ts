@@ -53,7 +53,8 @@ export const gemini: ProviderAdapter = {
           functionDeclarations: req.tools.map((t) => ({
             name: t.name,
             description: t.description,
-            parameters: t.parameters
+            // Gemini rejects an object schema with no properties, so tools with no inputs omit it
+            ...(Object.keys(t.parameters?.properties ?? {}).length > 0 ? { parameters: t.parameters } : {})
           }))
         }
       ];
