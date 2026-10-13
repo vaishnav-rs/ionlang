@@ -156,6 +156,17 @@ set name to ask user "What's your name?"       # ask the person at the keyboard
 
 Everything after the first `/` is the model id, so OpenRouter ids like `anthropic/claude-3.5-sonnet` work as written. Name only the provider (`"groq"`) to get its default model.
 
+**Backup models.** Free tiers run out and services have bad moments. Give an agent one or more `fallback` lines and Ion switches when the main model is rate-limited or down (it first waits out short rate limits and retries; for a used-up daily quota it switches at once and skips the main model for 10 minutes):
+
+```
+agent helper:
+    model "gemini/gemini-2.5-flash"
+    fallback "gemini/gemini-2.5-flash-lite"
+    fallback "groq/llama-3.3-70b-versatile"     # another provider uses its own key variable
+```
+
+Errors a different model can't fix (a wrong key, a bad request) are reported, not retried.
+
 **Your own server (custom).** Point Ion at anything that speaks the OpenAI API, such as Ollama, LM Studio, vLLM or a company gateway:
 
 ```

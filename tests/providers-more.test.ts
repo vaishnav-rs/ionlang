@@ -208,3 +208,74 @@ describe("retrying rate limits", () => {
     expect(calls).toBe(1);
   });
 });
+
+describe("model fallbacks", () => {
+  async function runWithNotes(src: string) {
+    const out: string[] = [];
+    const notes: string[] = [];
+    const io: IonIO = { say: (t) => void out.push(t), note: (t) => void notes.push(t), readLine: async () => null, confirm: async () => true };
+    await new Interpreter({ io }).runSource(src);
+    return { out, notes };
+  }
+  const reply = (text: string) => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
+  const dailyQuota = () => new Response(JSON.stringify({ error: { code: 429, status: "RESOURCE_EXHAUSTED", details: [{ retryDelay: "29533s" }] } }), { status: 429 });
+  const SRC = 'agent a:\n    model "gemini/gemini-2.5-flash"\n    fallback "gemini/gemini-2.5-flash-lite"\n    key "k"\nsay ask a "one"\nsay ask a "two"';
+
+  it("switches to the backup when the main model's daily quota is gone, then stops asking the main one", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      return String(url).includes("gemini-2.5-flash:") ? dailyQuota() : reply("from backup");
+    }) as typeof fetch;
+    const { out, notes } = await runWithNotes(SRC);
+    expect(out).toEqual(["from backup", "from backup"]);
+    expect(urls.filter((u) => u.includes("gemini-2.5-flash:"))).toHaveLength(1); // tried once, then skipped
+    expect(urls.filter((u) => u.includes("gemini-2.5-flash-lite:"))).toHaveLength(2);
+    expect(notes.some((n) => n.includes("switching to gemini-2.5-flash-lite"))).toBe(true);
+  });
+
+  it("uses the main model while it works", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => (urls.push(String(url)), reply("from main"))) as typeof fetch;
+    const { out } = await runWithNotes(SRC);
+    expect(out).toEqual(["from main", "from main"]);
+    expect(urls.every((u) => u.includes("gemini-2.5-flash:"))).toBe(true);
+  });
+
+  it("does not switch for errors a different model cannot fix (like a bad key)", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => (urls.push(String(url)), new Response("API key not valid", { status: 400 }))) as typeof fetch;
+    await expect(runWithNotes(SRC)).rejects.toThrow(/400/);
+    expect(urls).toHaveLength(1);
+  });
+
+  it("fails clearly when the backup is down too", async () => {
+    globalThis.fetch = (async () => dailyQuota()) as typeof fetch;
+    await expect(runWithNotes(SRC)).rejects.toThrow(/429/);
+  });
+
+  it("a backup can be another provider, using that provider's own key", async () => {
+    const seen: { url: string; auth?: string }[] = [];
+    process.env.GROQ_API_KEY = "groq-key";
+    globalThis.fetch = (async (url: any, init: any) => {
+      seen.push({ url: String(url), auth: init?.headers?.Authorization });
+      return String(url).includes("generativelanguage") ? dailyQuota() : new Response(JSON.stringify({ choices: [{ message: { content: "from groq" } }] }), { status: 200 });
+    }) as typeof fetch;
+    try {
+      const { out } = await runWithNotes('agent a:\n    model "gemini/gemini-2.5-flash"\n    fallback "groq/llama-3.3-70b-versatile"\n    key "gem"\nsay ask a "hi"');
+      expect(out).toEqual(["from groq"]);
+      expect(seen.at(-1)).toMatchObject({ url: "https://api.groq.com/openai/v1/chat/completions", auth: "Bearer groq-key" });
+    } finally {
+      delete process.env.GROQ_API_KEY;
+    }
+  });
+
+  it("explains a fallback that makes no sense, and ion check agrees", async () => {
+    await expect(runWithNotes('agent a:\n    model "mock"\n    fallback "grok/x"')).rejects.toThrow(/can't use "grok\/x" as a fallback/);
+    const custom = await runWithNotes('agent a:\n    model "mock"\n    fallback "custom/x"').catch((e) => e as IonError);
+    expect(custom.hint).toMatch(/built-in provider/);
+    const msgs = check(parse('agent a:\n    model "mock"\n    fallback "groq/x"\nagent b:\n    model "mock"\n    fallback "nope/x"')).map((d) => d.message);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toMatch(/Agent 'b'.*fallback/);
+  });
+});

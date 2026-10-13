@@ -2,6 +2,13 @@ import { AgentDefNode, GrantKind, GrantNode, Modality, ModelRef, ProviderRef } f
 import { ResolvedProgram } from "../semantic/semantic.js";
 import { ToolSpec } from "../runtime/providers/types.js";
 
+/** One model an agent can talk to: where, which model, and the key for it. */
+export interface ModelTarget {
+  provider: ProviderRef;
+  model?: ModelRef;
+  apiKey: string;
+}
+
 export interface TeammateInfo {
   name: string;
   grants: GrantKind[];
@@ -23,6 +30,8 @@ export interface AgentConfig {
   standalone?: boolean; // not part of any team: skip the "specialist on a team" wording
   team?: boolean; // this config stands for a whole team (its lead plus members)
   memory?: boolean; // keep conversation history between asks (default true)
+  fallbacks?: ModelTarget[]; // backup models, tried in order when the main one is rate-limited or down
+  primaryBlockedUntil?: number; // set by the agent loop: skip the main model until this time (ms since epoch)
   extraTools?: ToolSpec[]; // user-defined tools
   runExtraTool?: (name: string, args: Record<string, unknown>) => Promise<string>;
 }

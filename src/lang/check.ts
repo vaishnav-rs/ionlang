@@ -74,6 +74,14 @@ export function check(program: Stmt[]): Diagnostic[] {
     } else if (a.endpoint || a.format || a.authHeader) {
       add(a.line, `Agent '${a.name}': 'endpoint', 'format' and 'header' only work with model "custom/...".`);
     }
+    for (const f of a.fallbacks) {
+      const fm = literal(f);
+      if (fm === undefined) continue;
+      const fp = fm.split("/")[0];
+      if (!PROVIDERS.includes(fp) || fp === "custom") {
+        add(a.line, `Agent '${a.name}': I can't use "${fm}" as a fallback model.`, didYouMean(fp, PROVIDERS) ?? 'Write it like: fallback "gemini/gemini-2.5-flash-lite"');
+      }
+    }
     for (const ab of a.abilities) {
       if (ab.kind === "ask" && !hasImports) {
         for (const n of ab.names) if (!agents.has(n) && !teams.has(n)) add(ab.line, `Agent '${a.name}' can ask '${n}', but there is no agent or team with that name.`, didYouMean(n, known()));

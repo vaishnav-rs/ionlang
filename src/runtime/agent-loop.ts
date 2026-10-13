@@ -1,4 +1,4 @@
-import { AgentConfig } from "../interpreter/program.js";
+import { AgentConfig, ModelTarget } from "../interpreter/program.js";
 import { resolveProvider } from "./providers/provider-table.js";
 import { ChatMessage, ToolCall, ToolSpec } from "./providers/types.js";
 import { ConfirmFn, GrantManager } from "./grants/grant-manager.js";
@@ -64,6 +64,11 @@ function suggestedDelaySeconds(message: string): number | undefined {
   return m ? Number(m[1]) : undefined;
 }
 
+/** Rate limits and provider outages: worth waiting for, or switching to a backup model. */
+export function isTransient(message: string): boolean {
+  return /\berror (429|500|502|503|504)\b/.test(message);
+}
+
 /**
  * Rate limits (429) and brief provider outages (5xx) are normal. Wait as long as the provider asks and
  * try again, up to twice, instead of failing the whole conversation. Waits longer than
@@ -75,7 +80,7 @@ export async function sendWithRetry<T>(call: () => Promise<T>, attempts = 3): Pr
       return await call();
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      const transient = /\berror (429|500|502|503|504)\b/.test(message);
+      const transient = isTransient(message);
       const wait = suggestedDelaySeconds(message) ?? [6, 15][attempt - 1] ?? 15;
       if (!transient || attempt >= attempts || wait > MAX_RETRY_WAIT_SECONDS) throw err;
       await sleep(wait * 1000);
@@ -91,6 +96,8 @@ export interface AgentLoopDeps {
   onChunk?: ChunkFn;
   onToolCall?: ToolCallFn;
   onToolResult?: ToolResultFn;
+  /** Called when the main model is unavailable and a backup takes over. */
+  onFallback?: (agent: string, model: string, reason: string) => void;
 }
 
 export function buildToolSpecs(agent: AgentConfig): ToolSpec[] {
@@ -164,6 +171,37 @@ async function executeTool(
   throw new Error(`unknown tool '${call.name}'`);
 }
 
+const PRIMARY_COOLDOWN_MS = 10 * 60 * 1000;
+
+/**
+ * Sends one request to the agent's main model, falling back to its backup models (in order) when the
+ * main one is rate-limited or down. Once the main model has failed this way it is skipped for ten
+ * minutes, so every message is not delayed by a model that is known to be exhausted.
+ */
+async function sendToModel(deps: AgentLoopDeps, messages: ChatMessage[], tools: ToolSpec[]) {
+  const agent = deps.agent;
+  const primary: ModelTarget = { provider: agent.provider, model: agent.model, apiKey: agent.apiKey };
+  const fallbacks = agent.fallbacks ?? [];
+  const blocked = fallbacks.length > 0 && (agent.primaryBlockedUntil ?? 0) > Date.now();
+  const order = blocked ? fallbacks : [primary, ...fallbacks];
+
+  for (let i = 0; i < order.length; i++) {
+    const target = order[i];
+    try {
+      return await sendWithRetry(() =>
+        resolveProvider(target.provider).sendMessage({ messages, tools, model: target.model?.modelId, apiKey: target.apiKey })
+      );
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (!isTransient(message) || i === order.length - 1) throw err;
+      if (target === primary) agent.primaryBlockedUntil = Date.now() + PRIMARY_COOLDOWN_MS;
+      const next = order[i + 1];
+      deps.onFallback?.(agent.name, next.model?.modelId ?? "default", message.slice(0, 120));
+    }
+  }
+  throw new Error("no model available"); // unreachable: the loop above returns or throws
+}
+
 /**
  * Runs one full turn (possibly several tool-calling round trips) for a single
  * agent given its conversation history plus a new incoming user message.
@@ -174,20 +212,12 @@ export async function runTurn(
   userText: string,
   deps: AgentLoopDeps
 ): Promise<{ finalText: string; history: ChatMessage[] }> {
-  const provider = resolveProvider(deps.agent.provider);
   const tools = buildToolSpecs(deps.agent);
   const messages: ChatMessage[] = [...history, { role: "user", content: userText }];
   const systemPrompt = buildSystemPrompt(deps.agent);
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const result = await sendWithRetry(() =>
-      provider.sendMessage({
-        messages: [{ role: "system", content: systemPrompt }, ...messages],
-        tools,
-        model: deps.agent.model?.modelId,
-        apiKey: deps.agent.apiKey
-      })
-    );
+    const result = await sendToModel(deps, [{ role: "system", content: systemPrompt }, ...messages], tools);
 
     if (result.text) deps.onChunk?.(deps.agent.name, result.text);
 

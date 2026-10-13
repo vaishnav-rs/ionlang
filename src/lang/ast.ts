@@ -50,6 +50,7 @@ export type Stmt =
       model?: Expr;
       role?: Expr;
       key?: Secret;
+      fallbacks: Expr[];
       endpoint?: Expr;
       format?: "openai" | "anthropic" | "raw";
       authHeader?: Expr;

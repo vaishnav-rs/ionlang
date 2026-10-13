@@ -361,7 +361,7 @@ class Parser {
     if (this.peek().type !== "indent") this.fail("An agent needs settings, indented under its name.", 'For example:\n    model "gemini/gemini-2.5-flash"');
     this.next();
     const node: Extract<Stmt, { k: "agent" }> = {
-      k: "agent", name, abilities: [], memory: true, input: [], output: [], line: t.line
+      k: "agent", name, abilities: [], fallbacks: [], memory: true, input: [], output: [], line: t.line
     };
     this.skipNewlines();
     while (this.peek().type !== "dedent" && this.peek().type !== "eof") {
@@ -383,6 +383,10 @@ class Parser {
         case "apikey":
           this.acceptWord("is");
           node.key = this.parseSecret();
+          break;
+        case "fallback":
+          this.acceptWord("model");
+          node.fallbacks.push(this.parseAdditive());
           break;
         case "endpoint":
           this.acceptWord("is");
@@ -426,7 +430,7 @@ class Parser {
           break;
         }
         default: {
-          const guess = didYouMean(w.value, ["model", "role", "instructions", "key", "apikey", "endpoint", "format", "header", "can", "remembers", "forgets", "input", "output"]);
+          const guess = didYouMean(w.value, ["model", "role", "instructions", "key", "apikey", "fallback", "endpoint", "format", "header", "can", "remembers", "forgets", "input", "output"]);
           this.fail(`I don't know the agent setting '${w.value}'.`, guess ?? "Agent settings: model, role, key, can, remembers/forgets, input, output (custom providers also: endpoint, format, header).", w);
         }
       }

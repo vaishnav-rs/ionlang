@@ -50,6 +50,7 @@ interface AgentSpec {
   role?: string;
   key?: Secret;
   custom?: { endpoint: string; requestFormat: "openai" | "anthropic" | "raw"; authHeader: string };
+  fallbacks: { provider: string; modelId?: string }[];
   abilities: ResolvedAbility[];
   memory: boolean;
   input: string[];
@@ -499,6 +500,22 @@ export class Interpreter {
         didYouMean(provider, PROVIDERS) ?? `Providers: ${PROVIDERS.join(", ")}. Write the model like "gemini/gemini-2.5-flash".`
       );
     }
+    const fallbacks: AgentSpec["fallbacks"] = [];
+    for (const f of s.fallbacks) {
+      const text = toText(await this.evalExpr(f, env)).trim();
+      const at = text.indexOf("/");
+      const fp = at < 0 ? text : text.slice(0, at);
+      if (!PROVIDERS.includes(fp) || fp === "custom") {
+        throw new IonError(
+          `I can't use "${text}" as a fallback model.`,
+          s.line,
+          fp === "custom"
+            ? "A fallback must be a built-in provider like gemini, openai, anthropic, openrouter, groq or cerebras."
+            : didYouMean(fp, PROVIDERS) ?? 'Write it like: fallback "gemini/gemini-2.5-flash-lite"'
+        );
+      }
+      fallbacks.push({ provider: fp, modelId: at < 0 ? undefined : text.slice(at + 1) });
+    }
     let custom: AgentSpec["custom"];
     if (provider === "custom") {
       if (!s.endpoint) {
@@ -529,6 +546,7 @@ export class Interpreter {
       role: s.role ? toText(await this.evalExpr(s.role, env)) : undefined,
       key: await this.secret(s.key, env),
       custom,
+      fallbacks,
       abilities,
       memory: s.memory,
       input: s.input,
@@ -652,6 +670,15 @@ export class Interpreter {
       team: !!team,
       standalone: !this.delegatedNames().has(name) && !team,
       memory: spec.memory,
+      fallbacks: spec.fallbacks.map((f) => ({
+        provider: { kind: "builtin" as const, name: f.provider, line: spec.line },
+        model: f.modelId ? { provider: f.provider, modelId: f.modelId } : undefined,
+        // the same key if it is the same provider (and the agent wrote one), else that provider's own variable
+        apiKey:
+          f.provider === "mock" || f.provider === "demo"
+            ? ""
+            : this.resolveSecret(f.provider === spec.provider ? spec.key : undefined, spec, DEFAULT_KEY_ENV[f.provider])
+      })),
       extraTools: extraTools.length ? extraTools : undefined,
       runExtraTool: extraTools.length
         ? async (toolName, args) => {
@@ -688,6 +715,7 @@ export class Interpreter {
         agent: cfg,
         grantManager: this.grantManagerFor(cfg),
         onToolCall: (agent, tool, detail) => this.opts.io.note(`${agent} used ${tool} ${detail.length > 80 ? detail.slice(0, 77) + "..." : detail}`),
+        onFallback: (agent, model, reason) => this.opts.io.note(`${agent}: main model unavailable, switching to ${model} (${reason})`),
         delegate: cfg.isOrchestrator ? (n, task) => this.askNamed(n, task, line, session, depth + 1) : undefined
       });
       if (remembers) this.histories.set(key, updated);
