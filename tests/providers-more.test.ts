@@ -175,3 +175,36 @@ describe("providers in the Ion language", () => {
     expect(e.hint).toMatch(/groq/);
   });
 });
+
+describe("retrying rate limits", () => {
+  it("waits out a 429 using the provider's own retryDelay, then succeeds", async () => {
+    const { sendWithRetry } = await import("../src/runtime/agent-loop.js");
+    let calls = 0;
+    const started = Date.now();
+    const r = await sendWithRetry(async () => {
+      calls++;
+      if (calls < 3) throw new Error('Gemini API error 429: {"error":{"details":[{"retryDelay":"0.05s"}]}}');
+      return "done";
+    });
+    expect(r).toBe("done");
+    expect(calls).toBe(3);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(90);
+  });
+
+  it("retries a 503 but gives up after three attempts", async () => {
+    const { sendWithRetry } = await import("../src/runtime/agent-loop.js");
+    let calls = 0;
+    await expect(sendWithRetry(async () => { calls++; throw new Error('OpenAI API error 503: retry in 0.01s'); })).rejects.toThrow(/503/);
+    expect(calls).toBe(3);
+  });
+
+  it("never retries errors that retrying cannot fix, or waits that are too long", async () => {
+    const { sendWithRetry } = await import("../src/runtime/agent-loop.js");
+    let calls = 0;
+    await expect(sendWithRetry(async () => { calls++; throw new Error("Gemini API error 401: API key not valid"); })).rejects.toThrow(/401/);
+    expect(calls).toBe(1);
+    calls = 0;
+    await expect(sendWithRetry(async () => { calls++; throw new Error('Gemini API error 429: "retryDelay": "3600s"'); })).rejects.toThrow(/429/);
+    expect(calls).toBe(1);
+  });
+});

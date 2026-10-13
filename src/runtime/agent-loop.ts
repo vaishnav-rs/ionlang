@@ -55,6 +55,34 @@ function buildBasePrompt(agent: AgentConfig): string {
   )}. Return clear, direct results — they may be consumed by a teammate or shown straight to the user.`;
 }
 
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+const MAX_RETRY_WAIT_SECONDS = 40;
+
+/** How long the provider asked us to wait (e.g. Gemini's "retryDelay": "17s"), if it said. */
+function suggestedDelaySeconds(message: string): number | undefined {
+  const m = message.match(/"retryDelay"\s*:\s*"(\d+(?:\.\d+)?)s"/) ?? message.match(/retry (?:in|after) (\d+(?:\.\d+)?)\s*s/i);
+  return m ? Number(m[1]) : undefined;
+}
+
+/**
+ * Rate limits (429) and brief provider outages (5xx) are normal. Wait as long as the provider asks and
+ * try again, up to twice, instead of failing the whole conversation. Waits longer than
+ * MAX_RETRY_WAIT_SECONDS mean a daily quota or a real outage, so those fail straight away.
+ */
+export async function sendWithRetry<T>(call: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await call();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      const transient = /\berror (429|500|502|503|504)\b/.test(message);
+      const wait = suggestedDelaySeconds(message) ?? [6, 15][attempt - 1] ?? 15;
+      if (!transient || attempt >= attempts || wait > MAX_RETRY_WAIT_SECONDS) throw err;
+      await sleep(wait * 1000);
+    }
+  }
+}
+
 export interface AgentLoopDeps {
   agent: AgentConfig;
   grantManager: GrantManager;
@@ -152,12 +180,14 @@ export async function runTurn(
   const systemPrompt = buildSystemPrompt(deps.agent);
 
   for (let turn = 0; turn < MAX_TURNS; turn++) {
-    const result = await provider.sendMessage({
-      messages: [{ role: "system", content: systemPrompt }, ...messages],
-      tools,
-      model: deps.agent.model?.modelId,
-      apiKey: deps.agent.apiKey
-    });
+    const result = await sendWithRetry(() =>
+      provider.sendMessage({
+        messages: [{ role: "system", content: systemPrompt }, ...messages],
+        tools,
+        model: deps.agent.model?.modelId,
+        apiKey: deps.agent.apiKey
+      })
+    );
 
     if (result.text) deps.onChunk?.(deps.agent.name, result.text);
 
