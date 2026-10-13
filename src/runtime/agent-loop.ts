@@ -23,9 +23,22 @@ const GRANT_DESCRIPTIONS: Record<GrantKind, string> = {
   "user-admin": "user administration"
 };
 
-function describeCapabilities(grants: GrantKind[]): string {
+function describeCapabilities(grants: GrantKind[], toolCount = 0): string {
   const described = grants.filter((g) => g !== "orchestration-powers").map((g) => GRANT_DESCRIPTIONS[g]);
+  if (toolCount > 0) described.push("the tools you have been given");
   return described.length > 0 ? described.join(", ") : "general conversation, no special tool access";
+}
+
+/** One line per custom tool, so the instructions agree with the tools the agent really has. */
+function describeTools(agent: AgentConfig): string {
+  const tools = agent.extraTools ?? [];
+  if (tools.length === 0) return "";
+  const firstSentence = (d: string) => (d.split(/(?<=[.!?])\s/)[0] ?? d).slice(0, 160);
+  return [
+    `Tools you can call:`,
+    ...tools.map((t) => `- ${t.name}: ${firstSentence(t.description)}`),
+    `Call them whenever they help. Never say you lack a capability that one of your tools provides.`
+  ].join("\n");
 }
 
 function buildSystemPrompt(agent: AgentConfig): string {
@@ -38,21 +51,29 @@ ${base}` : base;
 function buildBasePrompt(agent: AgentConfig): string {
   if (agent.isOrchestrator) {
     const roster = agent.teammateInfo
-      .map((t) => `- ${t.name}: ${describeCapabilities(t.grants)} (via delegate_to_${t.name})`)
+      .map((t) => {
+        const what = t.summary ?? describeCapabilities(t.grants, t.tools?.length ?? 0);
+        return `- ${t.name}: ${what}${t.tools?.length ? ` Tools: ${t.tools.join(", ")}.` : ""} (via delegate_to_${t.name})`;
+      })
       .join("\n");
     return [
       `You are '${agent.name}', the orchestrator of a team of specialist agents.`,
-      `Your own capabilities: ${describeCapabilities(agent.grants.map((g) => g.kind))}.`,
+      `Your own capabilities: ${describeCapabilities(agent.grants.map((g) => g.kind), agent.extraTools?.length ?? 0)}.`,
+      describeTools(agent),
       `Teammates you can delegate to:\n${roster}`,
       `For requests that span multiple specialties, chain delegate calls in sequence — e.g. delegate to a research-capable teammate first, then hand its output to another teammate who depends on it (such as one that drafts content from research). Only answer directly yourself when no teammate is better suited.`
-    ].join("\n\n");
+    ].filter(Boolean).join("\n\n");
   }
+  const toolCount = agent.extraTools?.length ?? 0;
+  const caps = describeCapabilities(agent.grants.map((g) => g.kind), toolCount);
+  const tools = describeTools(agent);
   if (agent.standalone) {
-    return `You are '${agent.name}'. Your capabilities: ${describeCapabilities(agent.grants.map((g) => g.kind))}.`;
+    return [`You are '${agent.name}'. Your capabilities: ${caps}.`, tools].filter(Boolean).join("\n\n");
   }
-  return `You are '${agent.name}', a specialist agent on a team. Your capabilities: ${describeCapabilities(
-    agent.grants.map((g) => g.kind)
-  )}. Return clear, direct results — they may be consumed by a teammate or shown straight to the user.`;
+  return [
+    `You are '${agent.name}', a specialist agent on a team. Your capabilities: ${caps}. Return clear, direct results — they may be consumed by a teammate or shown straight to the user.`,
+    tools
+  ].filter(Boolean).join("\n\n");
 }
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -171,19 +192,35 @@ async function executeTool(
   throw new Error(`unknown tool '${call.name}'`);
 }
 
-const PRIMARY_COOLDOWN_MS = 10 * 60 * 1000;
+const MAX_COOLDOWN_MS = 10 * 60 * 1000;
+/** Models that just failed with a rate limit or an outage, and when to try them again. Shared by every agent. */
+const cooldowns = new Map<string, number>();
+
+/** For tests. */
+export function resetModelCooldowns(): void {
+  cooldowns.clear();
+}
+
+const targetKey = (t: ModelTarget) =>
+  `${t.provider.kind === "builtin" ? t.provider.name : t.provider.endpoint}|${t.model?.modelId ?? ""}|${t.apiKey.slice(-6)}`;
+
+/** How long to leave a model alone: as long as it said (up to ten minutes), or two minutes for an outage. */
+function cooldownMs(message: string): number {
+  const seconds = suggestedDelaySeconds(message);
+  return seconds === undefined ? 2 * 60 * 1000 : Math.min(seconds * 1000 + 2000, MAX_COOLDOWN_MS);
+}
 
 /**
  * Sends one request to the agent's main model, falling back to its backup models (in order) when the
- * main one is rate-limited or down. Once the main model has failed this way it is skipped for ten
- * minutes, so every message is not delayed by a model that is known to be exhausted.
+ * main one is rate-limited or down. A model that fails this way is skipped for a while by every agent
+ * (so a used-up daily quota is discovered once, not once per agent per message).
  */
 async function sendToModel(deps: AgentLoopDeps, messages: ChatMessage[], tools: ToolSpec[]) {
   const agent = deps.agent;
-  const primary: ModelTarget = { provider: agent.provider, model: agent.model, apiKey: agent.apiKey };
-  const fallbacks = agent.fallbacks ?? [];
-  const blocked = fallbacks.length > 0 && (agent.primaryBlockedUntil ?? 0) > Date.now();
-  const order = blocked ? fallbacks : [primary, ...fallbacks];
+  const all: ModelTarget[] = [{ provider: agent.provider, model: agent.model, apiKey: agent.apiKey }, ...(agent.fallbacks ?? [])];
+  const now = Date.now();
+  const available = all.filter((t) => (cooldowns.get(targetKey(t)) ?? 0) <= now);
+  const order = available.length > 0 ? available : all; // everything is cooling down: try them anyway
 
   for (let i = 0; i < order.length; i++) {
     const target = order[i];
@@ -193,10 +230,10 @@ async function sendToModel(deps: AgentLoopDeps, messages: ChatMessage[], tools: 
       );
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      if (!isTransient(message) || i === order.length - 1) throw err;
-      if (target === primary) agent.primaryBlockedUntil = Date.now() + PRIMARY_COOLDOWN_MS;
-      const next = order[i + 1];
-      deps.onFallback?.(agent.name, next.model?.modelId ?? "default", message.slice(0, 120));
+      if (!isTransient(message)) throw err;
+      cooldowns.set(targetKey(target), Date.now() + cooldownMs(message));
+      if (i === order.length - 1) throw err;
+      deps.onFallback?.(agent.name, order[i + 1].model?.modelId ?? "default", message.slice(0, 120));
     }
   }
   throw new Error("no model available"); // unreachable: the loop above returns or throws

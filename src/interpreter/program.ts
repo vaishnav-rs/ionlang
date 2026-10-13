@@ -12,6 +12,8 @@ export interface ModelTarget {
 export interface TeammateInfo {
   name: string;
   grants: GrantKind[];
+  tools?: string[]; // names of the custom tools this teammate has
+  summary?: string; // one sentence about what it is for (the start of its role)
 }
 
 export interface AgentConfig {
@@ -31,7 +33,6 @@ export interface AgentConfig {
   team?: boolean; // this config stands for a whole team (its lead plus members)
   memory?: boolean; // keep conversation history between asks (default true)
   fallbacks?: ModelTarget[]; // backup models, tried in order when the main one is rate-limited or down
-  primaryBlockedUntil?: number; // set by the agent loop: skip the main model until this time (ms since epoch)
   extraTools?: ToolSpec[]; // user-defined tools
   runExtraTool?: (name: string, args: Record<string, unknown>) => Promise<string>;
 }

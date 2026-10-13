@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from "vitest";
+import { describe, it, expect, afterEach, beforeEach } from "vitest";
 import { openrouter, groq, cerebras } from "../src/runtime/providers/openai.js";
 import { makeCustomProvider } from "../src/runtime/providers/custom.js";
 import { resolveProvider } from "../src/runtime/providers/provider-table.js";
@@ -6,6 +6,7 @@ import { Interpreter, IonIO } from "../src/lang/interpreter.js";
 import { IonError } from "../src/lang/errors.js";
 import { parse } from "../src/lang/parser.js";
 import { check } from "../src/lang/check.js";
+import { resetModelCooldowns } from "../src/runtime/agent-loop.js";
 
 const realFetch = globalThis.fetch;
 afterEach(() => {
@@ -210,6 +211,7 @@ describe("retrying rate limits", () => {
 });
 
 describe("model fallbacks", () => {
+  beforeEach(() => resetModelCooldowns());
   async function runWithNotes(src: string) {
     const out: string[] = [];
     const notes: string[] = [];
@@ -281,6 +283,7 @@ describe("model fallbacks", () => {
 });
 
 describe("empty model replies", () => {
+  beforeEach(() => resetModelCooldowns());
   const empty = () => new Response(JSON.stringify({ candidates: [{ content: { parts: [] }, finishReason: "STOP" }] }), { status: 200 });
   const said = (text: string) => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
   async function ask(responses: (() => Response)[]) {
@@ -310,5 +313,97 @@ describe("empty model replies", () => {
 
   it("gives up with a clear error if it never answers", async () => {
     await expect(ask([empty])).rejects.toThrow(/kept returning an empty reply/);
+  });
+});
+
+describe("what an agent is told about its tools and teammates", () => {
+  beforeEach(() => resetModelCooldowns());
+  const reply = (text: string) => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text }] } }] }), { status: 200 });
+
+  async function systemPrompts(src: string) {
+    const prompts: string[] = [];
+    globalThis.fetch = (async (_u: any, init: any) => {
+      prompts.push(JSON.parse(init.body).systemInstruction?.parts?.[0]?.text ?? "");
+      return reply("ok");
+    }) as typeof fetch;
+    const io: IonIO = { say() {}, note() {}, readLine: async () => null, confirm: async () => true };
+    await new Interpreter({ io }).runSource(src);
+    return prompts;
+  }
+
+  it("lists the agent's tools instead of claiming it has no capabilities", async () => {
+    const [prompt] = await systemPrompts(`
+tool shout(text):
+    describe "Makes text LOUD. Extra detail that is cut."
+    give back upper(text)
+agent a:
+    model "gemini/gemini-2.5-flash"
+    key "k1"
+    can use shout
+say ask a "hi"`);
+    expect(prompt).toMatch(/Tools you can call:\n- shout: Makes text LOUD\./);
+    expect(prompt).toMatch(/Never say you lack a capability/);
+    expect(prompt).not.toMatch(/no special tool access/);
+    expect(prompt).not.toMatch(/Extra detail that is cut/);
+  });
+
+  it("tells a lead what each teammate is for and which tools it has", async () => {
+    const [prompt] = await systemPrompts(`
+tool lookup(q):
+    describe "Looks things up"
+    give back q
+agent boss:
+    model "gemini/gemini-2.5-flash"
+    key "k2"
+    can ask helper
+agent helper:
+    model "gemini/gemini-2.5-flash"
+    key "k2"
+    role "You find facts on the web. You are careful."
+    can use lookup
+say ask boss "hi"`);
+    expect(prompt).toMatch(/- helper: You find facts on the web\. Tools: lookup\. \(via delegate_to_helper\)/);
+  });
+
+  it("a model that is out of quota is skipped by every agent, not rediscovered by each", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      return String(url).includes("gemini-2.5-flash:")
+        ? new Response(JSON.stringify({ error: { details: [{ retryDelay: "29533s" }] } }), { status: 429 })
+        : reply("from backup");
+    }) as typeof fetch;
+    const io: IonIO = { say() {}, note() {}, readLine: async () => null, confirm: async () => true };
+    await new Interpreter({ io }).runSource(`
+agent a:
+    model "gemini/gemini-2.5-flash"
+    fallback "gemini/gemini-2.5-flash-lite"
+    key "shared"
+agent b:
+    model "gemini/gemini-2.5-flash"
+    fallback "gemini/gemini-2.5-flash-lite"
+    key "shared"
+agent c:
+    model "gemini/gemini-2.5-flash"
+    fallback "gemini/gemini-2.5-flash-lite"
+    key "shared"
+say ask a "1"
+say ask b "2"
+say ask c "3"`);
+    expect(urls.filter((u) => u.includes("gemini-2.5-flash:"))).toHaveLength(1); // found out once, by the first agent
+    expect(urls.filter((u) => u.includes("gemini-2.5-flash-lite:"))).toHaveLength(3);
+  });
+
+  it("walks down a longer chain of backups", async () => {
+    const urls: string[] = [];
+    globalThis.fetch = (async (url: any) => {
+      urls.push(String(url));
+      return /flash:|flash-lite:/.test(String(url)) ? new Response('{"error":{"details":[{"retryDelay":"9999s"}]}}', { status: 429 }) : reply("third time lucky");
+    }) as typeof fetch;
+    const out: string[] = [];
+    const io: IonIO = { say: (t) => void out.push(t), note() {}, readLine: async () => null, confirm: async () => true };
+    await new Interpreter({ io }).runSource('agent a:\n    model "gemini/gemini-2.5-flash"\n    fallback "gemini/gemini-2.5-flash-lite"\n    fallback "gemini/gemini-flash-latest"\n    key "chain"\nsay ask a "hi"');
+    expect(out).toEqual(["third time lucky"]);
+    expect(urls).toHaveLength(3);
   });
 });

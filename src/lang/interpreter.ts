@@ -647,7 +647,14 @@ export class Interpreter {
     const grants = this.grantsOf(spec);
     const infoFor = (n: string) => {
       const target = this.agents.get(this.teams.get(n)?.lead ?? n)!;
-      return { name: n, grants: this.grantsOf(target).map((g) => g.kind) };
+      const toolNames = target.abilities.flatMap((a) => (a.kind === "tools" ? a.names : []));
+      const firstSentence = target.role?.split(/(?<=[.!?])\s/)[0]?.trim();
+      return {
+        name: n,
+        grants: this.grantsOf(target).map((g) => g.kind),
+        tools: toolNames.length ? toolNames : undefined,
+        summary: firstSentence ? firstSentence.slice(0, 200) : undefined
+      };
     };
 
     const config: AgentConfig = {
