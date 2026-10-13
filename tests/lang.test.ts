@@ -557,3 +557,146 @@ say checked(3)
     expect((await err('say regex_replace("x", "(", "")')).message).toMatch(/valid pattern/);
   });
 });
+
+describe("file-system, pattern and safe-http built-ins", () => {
+  async function tmpTree() {
+    const fs = await import("node:fs");
+    const os = await import("node:os");
+    const path = await import("node:path");
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "ion-fs-"));
+    fs.mkdirSync(path.join(dir, "docs", "deep", "deeper"), { recursive: true });
+    fs.mkdirSync(path.join(dir, "node_modules"));
+    fs.writeFileSync(path.join(dir, "a.txt"), "hello world, héllo ✓");
+    fs.writeFileSync(path.join(dir, "docs", "b.md"), "# b");
+    fs.writeFileSync(path.join(dir, "docs", "deep", "c.txt"), "c");
+    fs.writeFileSync(path.join(dir, "docs", "deep", "deeper", "d.txt"), "d");
+    fs.writeFileSync(path.join(dir, "node_modules", "x.js"), "x");
+    return { dir: dir.replace(/\\/g, "/"), fs, path };
+  }
+
+  it("list_dir: folders first, with type, size and modified time", async () => {
+    const { dir } = await tmpTree();
+    const r = await run(`
+set items to list_dir("${dir}")
+for each e in items:
+    say e.type + " " + e.name + " " + e.size
+say length(items[0].modified) is greater than 10
+`);
+    expect(r.out).toEqual(["folder docs 0", "folder node_modules 0", "file a.txt 23", "yes"]);
+    expect((await err('list_dir("/definitely/not/here")')).message).toMatch(/couldn't list/);
+  });
+
+  it("walk_dir: depth first with limits, skips named entries, reports truncation", async () => {
+    const { dir } = await tmpTree();
+    const r = await run(`
+set all to walk_dir("${dir}", {skip: ["node_modules"]})
+say length(all.entries)
+say all.truncated
+set shallow to walk_dir("${dir}", {max_depth: 2})
+say length(shallow.entries)
+set capped to walk_dir("${dir}", {max_entries: 3})
+say length(capped.entries)
+say capped.truncated
+say all.entries[0].path starts with "${dir}"
+`);
+    expect(r.out).toEqual(["7", "no", "6", "3", "yes", "yes"]);
+  });
+
+  it("walk_dir never follows symbolic links out of the folder", async () => {
+    const { dir, fs, path } = await tmpTree();
+    const outside = fs.mkdtempSync(path.join((await import("node:os")).tmpdir(), "ion-outside-"));
+    fs.writeFileSync(path.join(outside, "secret.txt"), "secret");
+    try { fs.symlinkSync(outside, path.join(dir, "link"), "junction"); } catch { return; } // cannot create links here: nothing to test
+    const r = await run(`
+set all to walk_dir("${dir}")
+set names to map(all.entries, to_name)
+to to_name(e):
+    give back e.name
+say names contains "secret.txt"
+say names contains "link"
+`).catch(async () => run(`
+to to_name(e):
+    give back e.name
+set all to walk_dir("${dir}")
+set names to map(all.entries, to_name)
+say names contains "secret.txt"
+say names contains "link"
+`));
+    expect(r.out).toEqual(["no", "yes"]); // the link itself is listed (as "other") but never entered
+  });
+
+  it("file_info, real_path and a limited read_file", async () => {
+    const { dir } = await tmpTree();
+    const r = await run(`
+say file_info("${dir}/a.txt").size
+say file_info("${dir}/nope").exists
+say file_info("${dir}/docs").type
+say real_path("${dir}/docs/../a.txt") is "${dir}/a.txt"
+say read_file("${dir}/a.txt", 5)
+say read_file("${dir}/a.txt", 100)
+`);
+    expect(r.out[0]).toBe("23");
+    expect(r.out.slice(1, 4)).toEqual(["no", "folder", "yes"]);
+    expect(r.out[4]).toBe("hello");
+    expect(r.out[5]).toBe("hello world, héllo ✓");
+    expect((await err(`say real_path("${dir}/missing")`)).message).toMatch(/doesn't exist/);
+  });
+
+  it("regex_matches returns matches, or the capture groups of each match", async () => {
+    const r = await run(`
+say regex_matches("a1 b22 c333", "[0-9]+")
+say regex_matches("k=v; x=y", "(\\w+)=(\\w+)")
+say regex_matches("Hello hello", "hello", "i")
+say regex_matches("none", "[0-9]+")
+say url_decode("a%20b+c%26d%C3%A9")
+`);
+    expect(r.out).toEqual(['["1", "22", "333"]', '[["k", "v"], ["x", "y"]]', '["Hello", "hello"]', "[]", "a b c&dé"]);
+  });
+
+  it("http public_only refuses this computer, private networks, and redirects into them", async () => {
+    const http = await import("node:http");
+    const srv = http.createServer((req, res) => {
+      if (req.url === "/redirect") { res.writeHead(302, { Location: "http://127.0.0.1:1/secret" }); return res.end(); }
+      res.writeHead(200); res.end("local");
+    });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+    try {
+      for (const target of [`${base}/`, "http://localhost:1/", "http://[::1]:1/", "http://10.0.0.5/", "http://192.168.1.1/", "http://169.254.169.254/latest/meta-data", "http://0.0.0.0/", "file:///etc/passwd"]) {
+        expect((await err(`http("GET", "${target}", {public_only: yes})`)).message).toMatch(/won't fetch|only http|private|local/i);
+      }
+      // the same request without public_only still works (it is the script author's choice)
+      expect((await run(`say http("GET", "${base}/").text`)).out).toEqual(["local"]);
+    } finally { srv.close(); }
+  });
+
+  it("http max_bytes stops a huge response early", async () => {
+    const http = await import("node:http");
+    const srv = http.createServer((_req, res) => { res.writeHead(200); res.end("x".repeat(100000)); });
+    await new Promise<void>((r) => srv.listen(0, "127.0.0.1", () => r()));
+    const base = `http://127.0.0.1:${(srv.address() as any).port}`;
+    try {
+      const r = await run(`
+set a to http("GET", "${base}", {max_bytes: 1000})
+say length(a.text)
+say a.truncated
+set b to http("GET", "${base}")
+say length(b.text)
+say b.truncated
+`);
+      expect(r.out).toEqual(["1000", "yes", "100000", "no"]);
+    } finally { srv.close(); }
+  });
+});
+
+import { isPrivateAddress } from "../src/runtime/safe-http.js";
+describe("isPrivateAddress", () => {
+  it.each([
+    ["127.0.0.1", true], ["10.1.2.3", true], ["172.16.0.1", true], ["172.31.255.255", true], ["192.168.0.1", true],
+    ["169.254.169.254", true], ["100.64.0.1", true], ["0.0.0.0", true], ["224.0.0.1", true], ["::1", true], ["fd00::1", true],
+    ["fe80::1", true], ["::ffff:127.0.0.1", true], ["not-an-ip", true],
+    ["8.8.8.8", false], ["172.32.0.1", false], ["172.15.0.1", false], ["93.184.216.34", false], ["2606:4700::1111", false]
+  ])("%s -> private? %s", (addr, expected) => {
+    expect(isPrivateAddress(addr)).toBe(expected);
+  });
+});

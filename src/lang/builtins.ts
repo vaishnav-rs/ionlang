@@ -1,6 +1,8 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { loadEnvFile } from "../runtime/env.js";
+import { BlockedAddressError, decodeBody, publicRequest } from "../runtime/safe-http.js";
+import { fileInfo, listDir, readText, realPath, walkDir } from "../runtime/fs-read.js";
 import { IonError } from "./errors.js";
 import {
   AgentRef, Builtin, BuiltinCtx, Env, fromJson, isEqual, isMap, newMap, toJson, toText, truthy, typeName
@@ -182,6 +184,18 @@ export function installBuiltins(env: Env): void {
     return str("regex_replace", a, 0).replace(re, str("regex_replace", a, 2));
   });
 
+  def("regex_matches", (a) => {
+    arity("regex_matches", a, 2, 3);
+    let re: RegExp;
+    try {
+      re = new RegExp(str("regex_matches", a, 1), `g${a.length === 3 ? str("regex_matches", a, 2).replace(/g/g, "") : ""}`);
+    } catch (e) {
+      throw new IonError(`That isn't a valid pattern: ${(e as Error).message}`);
+    }
+    // every match; with capture groups each match is a list of the groups, otherwise the matched text
+    return [...str("regex_matches", a, 0).matchAll(re)].map((m) => (m.length > 1 ? m.slice(1).map((g) => g ?? null) : m[0]));
+  });
+
   // ---- http, encoding ----
   def("http", async (a) => {
     arity("http", a, 2, 3);
@@ -190,7 +204,7 @@ export function installBuiltins(env: Env): void {
     const opts = a[2] ?? null;
     if (opts !== null && !isMap(opts)) throw new IonError(`http() options must be a map, but got ${typeName(opts)}.`, 0, 'Like: http("POST", url, {headers: {...}, body: {...}})');
     const o = (opts ?? {}) as Record<string, unknown>;
-    const known = ["headers", "query", "bearer", "body", "form", "timeout"];
+    const known = ["headers", "query", "bearer", "body", "form", "timeout", "public_only", "max_bytes"];
     for (const k of Object.keys(o)) {
       if (!known.includes(k)) throw new IonError(`http() doesn't know the option '${k}'.`, 0, `Options: ${known.join(", ")}`);
     }
@@ -216,27 +230,65 @@ export function installBuiltins(env: Env): void {
     }
     const seconds = o.timeout === undefined ? 30 : num("timeout", [o.timeout], 0);
 
-    let res: Response;
+    const maxBytes = o.max_bytes === undefined ? undefined : num("max_bytes", [o.max_bytes], 0);
+    let status = 0;
+    let text = "";
+    let truncated = false;
+    const resHeaders = newMap();
     try {
-      res = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(seconds * 1000) });
+      if (o.public_only !== undefined && truthy(o.public_only)) {
+        // can only reach the public internet: never this computer or a private network
+        const r = await publicRequest(url, { method, headers, body, timeoutMs: seconds * 1000, maxBytes });
+        status = r.status;
+        text = decodeBody(r.body, r.headers["content-type"]);
+        truncated = r.truncated;
+        for (const [k, v] of Object.entries(r.headers)) resHeaders[k] = v;
+      } else {
+        const res = await fetch(url, { method, headers, body, signal: AbortSignal.timeout(seconds * 1000) });
+        status = res.status;
+        res.headers.forEach((v, k) => { resHeaders[k] = v; });
+        if (maxBytes === undefined) text = await res.text();
+        else {
+          const chunks: Uint8Array[] = [];
+          let size = 0;
+          const reader = res.body?.getReader();
+          while (reader) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            size += value.length;
+            if (size > maxBytes) {
+              chunks.push(value.subarray(0, value.length - (size - maxBytes)));
+              truncated = true;
+              await reader.cancel();
+              break;
+            }
+            chunks.push(value);
+          }
+          text = Buffer.concat(chunks).toString("utf-8");
+        }
+      }
     } catch (e) {
+      if (e instanceof BlockedAddressError) throw new IonError(`I won't fetch ${url}: ${e.message}.`);
       const why = e instanceof Error && e.name === "TimeoutError" ? `it took longer than ${seconds} seconds` : (e as Error).message;
       throw new IonError(`I couldn't reach ${url}: ${why}`);
     }
-    const text = await res.text();
     let json: unknown = null;
     try { json = fromJson(JSON.parse(text)); } catch { /* not JSON */ }
-    const resHeaders = newMap();
-    res.headers.forEach((v, k) => { resHeaders[k] = v; });
     const out = newMap();
-    out.status = res.status;
-    out.ok = res.ok;
+    out.status = status;
+    out.ok = status >= 200 && status < 300;
     out.text = text;
     out.json = json;
     out.headers = resHeaders;
+    out.truncated = truncated;
     return out;
   });
   def("url_encode", (a) => (arity("url_encode", a, 1), encodeURIComponent(toText(a[0]))));
+  def("url_decode", (a) => {
+    arity("url_decode", a, 1);
+    const t = str("url_decode", a, 0).replace(/\+/g, " ");
+    try { return decodeURIComponent(t); } catch { return t; }
+  });
   def("base64_encode", (a) => (arity("base64_encode", a, 1), Buffer.from(toText(a[0]), "utf-8").toString("base64")));
   def("base64_decode", (a) => {
     arity("base64_decode", a, 1);
@@ -272,9 +324,34 @@ export function installBuiltins(env: Env): void {
   });
   def("sleep", (a) => new Promise((r) => setTimeout(() => r(null), num("sleep", a, 0) * 1000)));
   def("read_file", (a) => {
-    arity("read_file", a, 1);
-    try { return fs.readFileSync(str("read_file", a, 0), "utf-8"); }
+    arity("read_file", a, 1, 2);
+    try { return readText(str("read_file", a, 0), a.length === 2 ? num("read_file", a, 1) : undefined); }
     catch (e) { throw new IonError(`I couldn't read '${a[0]}': ${(e as Error).message}`); }
+  });
+  def("list_dir", (a) => {
+    arity("list_dir", a, 1);
+    try { return listDir(str("list_dir", a, 0)).map((e) => Object.assign(newMap(), e)); }
+    catch (e) { throw new IonError(`I couldn't list '${a[0]}': ${(e as Error).message}`); }
+  });
+  def("walk_dir", (a) => {
+    arity("walk_dir", a, 1, 2);
+    const o = a[1] === undefined ? {} : (isMap(a[1]) ? a[1] : (() => { throw new IonError(`walk_dir() options must be a map, but got ${typeName(a[1])}.`); })());
+    const skip = new Set(Array.isArray(o.skip) ? o.skip.map((x) => toText(x).toLowerCase()) : []);
+    const r = walkDir(str("walk_dir", a, 0), {
+      maxEntries: o.max_entries === undefined ? 5000 : num("max_entries", [o.max_entries], 0),
+      maxDepth: o.max_depth === undefined ? 8 : num("max_depth", [o.max_depth], 0),
+      skip
+    });
+    const out = newMap();
+    out.entries = r.entries.map((e) => Object.assign(newMap(), e));
+    out.truncated = r.truncated;
+    return out;
+  });
+  def("file_info", (a) => (arity("file_info", a, 1), Object.assign(newMap(), fileInfo(str("file_info", a, 0)))));
+  def("real_path", (a) => {
+    arity("real_path", a, 1);
+    try { return realPath(str("real_path", a, 0)); }
+    catch { throw new IonError(`'${a[0]}' doesn't exist.`); }
   });
   def("write_file", (a) => {
     arity("write_file", a, 2);
