@@ -16,7 +16,8 @@ const ionBlocks = [...readme.matchAll(/```ion\n([\s\S]*?)```/g)].map((m) => m[1]
 /** Blocks that need a person, a server, a real model or another file cannot run in a test. */
 function runnable(src: string): boolean {
   const models = [...src.matchAll(/model "([^"]*)"/g)].map((m) => m[1]);
-  const needsSomethingElse = /ask user|serve |chat with|use "/.test(src);
+  // a PDF, an outside server or another file is needed for these, so they are only checked for syntax
+  const needsSomethingElse = /ask user|serve |chat with|use "|^rag |^mcp /m.test(src);
   return models.every((m) => m === "mock") && !needsSomethingElse;
 }
 

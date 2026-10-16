@@ -42,6 +42,8 @@ export function terminalIO(reader: LineReader, autoYes: boolean): IonIO {
     say: (text) => console.log(text),
     note: (text) => console.log(`  \x1b[2m> ${text}\x1b[0m`),
     readLine: (prompt) => reader.read(prompt),
+    // a person can answer questions only at a real terminal; piped input has nobody to ask
+    interactive: !!process.stdin.isTTY,
     confirm: async ({ agent, grant, detail }) => {
       if (autoYes) return true;
       const answer = await reader.read(`  Allow '${agent}' to use ${grant} (${detail})? [y/N] `);

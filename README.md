@@ -311,6 +311,40 @@ team newsroom:
 
 The editor talks to the reporter, and the reporter uses its tools. The lead is who you talk to, and every delegation and tool call is recorded in the run log.
 
+### Ask your documents
+
+```ion
+rag handbook.vct from "handbook.pdf"
+
+agent clerk:
+    model "gemini/gemini-2.5-flash"
+    key from env "GEMINI_API_KEY"
+    can search handbook.vct
+```
+
+Point `rag` at a PDF, a text file or Markdown. Ion splits it into chunks, saves them as `handbook.vct` next to the script, and rebuilds that file only when the source changes. The agent gets a search tool for it, so it can answer from your document instead of guessing.
+
+Add `embedding model "gemini/gemini-embedding-001"` under the `rag` line and the search works by **meaning**: "Can I take a bank holiday?" finds "The office is closed on Fridays," even though they share no words. Leave it out and Ion asks once in the terminal which to use, and keyword search is the default if you press Enter.
+
+Try the offline version: `ion run examples/knowledge.ion`. It searches a real PDF with the mock model.
+
+### Plug in tools from anywhere (MCP)
+
+```ion
+mcp files:
+    command "npx -y @modelcontextprotocol/server-filesystem ./notes"
+
+agent librarian:
+    model "gemini/gemini-2.5-flash"
+    key from env "GEMINI_API_KEY"
+    can use files
+    can run commands
+```
+
+`mcp` connects to any [Model Context Protocol](https://modelcontextprotocol.io) server, and `can use files` gives the agent all the tools it offers. It can start a program on your computer (`command`) or reach a server on the web (`url`, with an optional `key`). Many ready-made servers already exist for files, calendars, databases and more. A program that runs on your computer also needs `can run commands`, and the first call asks you first.
+
+Ion also refuses an agent that can read your private files and also send data out (browse the web or run commands). Split those abilities into two agents and put them in a team.
+
 ### Talking to people
 
 ```ion

@@ -1,0 +1,13 @@
+# Ask a question of a PDF. The first run reads handbook.pdf and builds handbook.vct next to this file;
+# later runs reuse it until handbook.pdf changes. Works offline with the mock model:
+#   ion run examples/knowledge.ion
+
+rag handbook.vct from "handbook.pdf"
+
+agent clerk:
+    model "mock"
+    role "You answer questions about the office handbook, using the handbook."
+    can search handbook.vct
+
+say ask clerk 'CALL search_handbook_vct {"query": "office fridays"}'
+say ask clerk 'CALL search_handbook_vct {"query": "penguins hemisphere"}'

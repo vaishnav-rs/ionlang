@@ -27,7 +27,8 @@ const ABILITY_HELP =
   "    can browse the web\n" +
   "    can run commands\n" +
   '    can read gmail with token from env "GMAIL_TOKEN"\n' +
-  "    can use tool_name, other_tool\n" +
+  "    can use tool_name, other_tool, or an MCP server's name\n" +
+  "    can search knowledge_base.vct\n" +
   "    can ask other_agent, some_team";
 
 export function parse(source: string): Stmt[] {
@@ -234,6 +235,14 @@ class Parser {
           this.endOfLine();
           return { k: "describe", text, line: t.line };
         }
+        // 'mcp' and 'rag' are keywords only in their own forms ("mcp name:", "rag name from ..."),
+        // so they stay ordinary names elsewhere.
+        case "mcp":
+          if (this.peek(1).type === "word" && this.atOp(":", 2)) return this.parseMcp();
+          break;
+        case "rag":
+          if (this.peek(1).type === "word" && (this.atWord("from", 2) || this.atOp(".", 2))) return this.parseRag();
+          break;
         // 'test' and 'assert' are only keywords where they start a statement, so a
         // variable can still be called test or assert elsewhere.
         case "test":
@@ -263,6 +272,89 @@ class Parser {
     const e = this.parseExpr();
     this.endOfLine();
     return { k: "expr", e, line: t.line };
+  }
+
+  /** A name that may contain dots, such as file1.vct. Each part must be a word. */
+  private expectDottedName(what: string): string {
+    let name = this.expectName(what);
+    while (this.atOp(".") && this.peek(1).type === "word") {
+      this.next();
+      name += "." + this.next().value;
+    }
+    return name;
+  }
+
+  /** mcp notes:
+   *      command "npx -y some-server"
+   *  An MCP server is a program that offers tools. Agents reach it with `can use notes`. */
+  private parseMcp(): Stmt {
+    const t = this.next();
+    const name = this.expectName("a name for the MCP server");
+    this.expectOp(":", "Put a ':' after the server name, then indent its settings.");
+    this.skipNewlines();
+    if (this.peek().type !== "indent") {
+      this.fail("An MCP server needs a command or a url, indented under its name.", 'For example:\n    command "npx -y some-server"\nor:\n    url "https://example.com/mcp"');
+    }
+    this.next();
+    let command: Expr | undefined;
+    let url: Expr | undefined;
+    let key: Secret | undefined;
+    this.skipNewlines();
+    while (this.peek().type !== "dedent" && this.peek().type !== "eof") {
+      const w = this.next();
+      if (w.type === "word" && w.value === "command") {
+        this.acceptWord("is");
+        command = this.parseAdditive();
+      } else if (w.type === "word" && w.value === "url") {
+        this.acceptWord("is");
+        url = this.parseAdditive();
+      } else if (w.type === "word" && (w.value === "key" || w.value === "apikey")) {
+        this.acceptWord("is");
+        key = this.parseSecret();
+      } else {
+        this.fail(`I don't know the MCP setting ${this.describe(w)}.`, 'The settings are: command "...", or url "...", and key from env "NAME" for a server that needs a token.', w);
+      }
+      this.endOfLine();
+      this.skipNewlines();
+    }
+    if (this.peek().type === "dedent") this.next();
+    if (!command && !url) this.fail(`MCP server '${name}' needs a command or a url.`, 'Add: command "npx -y some-server"  or  url "https://example.com/mcp"', t);
+    if (command && url) this.fail(`MCP server '${name}' has both a command and a url.`, "Keep the one you need.", t);
+    return { k: "mcp", name, command, url, key, line: t.line };
+  }
+
+  /** rag file1.vct from "file1.pdf"
+   *  Builds (or reuses) the searchable index file1.vct from the source, and agents with
+   *  `can search file1.vct` can look things up in it. */
+  private parseRag(): Stmt {
+    const t = this.next();
+    const name = this.expectDottedName("a name for the knowledge base");
+    this.expectWord("from", 'Like this: rag file1.vct from "file1.pdf"');
+    const source = this.parseAdditive();
+    this.endOfLine();
+
+    // optional settings, indented under the line:
+    //   rag handbook.vct from "handbook.pdf"
+    //       embedding model "gemini/gemini-embedding-001"
+    let embeddingModel: Expr | undefined;
+    if (this.peek().type === "indent") {
+      this.next();
+      this.skipNewlines();
+      while (this.peek().type !== "dedent" && this.peek().type !== "eof") {
+        const w = this.next();
+        if (w.type === "word" && w.value === "embedding") {
+          this.expectWord("model", 'Like this: embedding model "gemini/gemini-embedding-001"');
+          this.acceptWord("is");
+          embeddingModel = this.parseAdditive();
+        } else {
+          this.fail(`I don't know the knowledge base setting ${this.describe(w)}.`, 'The setting is: embedding model "provider/model"', w);
+        }
+        this.endOfLine();
+        this.skipNewlines();
+      }
+      if (this.peek().type === "dedent") this.next();
+    }
+    return { k: "rag", name, source, embeddingModel, line: t.line };
   }
 
   /** True when a token could begin a value, such as `assert ok` or `assert (x)`. */
@@ -502,8 +594,13 @@ class Parser {
       case "use":
       case "ask": {
         const names: string[] = [];
-        do names.push(this.expectName(w.value === "use" ? "a tool name" : "an agent or team name")); while (this.acceptOp(","));
+        do names.push(this.expectName(w.value === "use" ? "a tool or MCP server name" : "an agent or team name")); while (this.acceptOp(","));
         return { kind: w.value === "use" ? "tools" : "ask", names, line };
+      }
+      case "search": {
+        const names: string[] = [];
+        do names.push(this.expectDottedName("a knowledge base name")); while (this.acceptOp(","));
+        return { kind: "search", names, line };
       }
       default:
         this.fail(`I don't know the ability '${w.value}'.`, ABILITY_HELP, w);

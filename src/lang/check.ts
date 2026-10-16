@@ -1,5 +1,6 @@
 import { Expr, Stmt } from "./ast.js";
 import { didYouMean } from "./errors.js";
+import { AbilityKind, RISK_HINT, riskyCombination } from "./risk.js";
 
 export interface Diagnostic {
   line: number;
@@ -27,6 +28,8 @@ export function check(program: Stmt[]): Diagnostic[] {
   const agents = new Map<string, Extract<Stmt, { k: "agent" }>>();
   const teams = new Map<string, Extract<Stmt, { k: "team" }>>();
   const tools = new Set<string>();
+  const mcpServers = new Set<string>();
+  const knowledgeBases = new Set<string>();
   const assigned = new Set<string>(["user"]);
   let hasImports = false;
 
@@ -49,6 +52,8 @@ export function check(program: Stmt[]): Diagnostic[] {
     if (s.k === "agent") { declare(s.name, s.line, "definition"); agents.set(s.name, s); assigned.add(s.name); }
     else if (s.k === "team") { declare(s.name, s.line, "definition"); teams.set(s.name, s); assigned.add(s.name); }
     else if (s.k === "tool") { declare(s.name, s.line, "definition"); tools.add(s.name); assigned.add(s.name); s.params.forEach((p) => assigned.add(p)); }
+    else if (s.k === "mcp") { declare(s.name, s.line, "definition"); mcpServers.add(s.name); assigned.add(s.name); }
+    else if (s.k === "rag") { declare(s.name, s.line, "definition"); knowledgeBases.add(s.name); }
     else if (s.k === "fn") { assigned.add(s.name); s.params.forEach((p) => assigned.add(p)); }
     else if (s.k === "set" && s.target.k === "var") assigned.add(s.target.name);
     else if (s.k === "foreach") assigned.add(s.name);
@@ -60,6 +65,13 @@ export function check(program: Stmt[]): Diagnostic[] {
 
   // pass 2: validate
   for (const a of agents.values()) {
+    const kinds = a.abilities.flatMap((ab): AbilityKind[] => {
+      if (ab.kind === "tools") return ab.names.filter((n) => mcpServers.has(n)).map((): AbilityKind => "shell"); // MCP servers run programs
+      return ab.kind === "files" || ab.kind === "gmail" || ab.kind === "search" || ab.kind === "web" || ab.kind === "shell" ? [ab.kind] : [];
+    });
+    const risk = riskyCombination(kinds);
+    if (risk) add(a.line, `Agent '${a.name}': ${risk}`, RISK_HINT);
+
     if (!a.model) add(a.line, `Agent '${a.name}' needs a model.`, 'Add a line inside the agent, like: model "gemini/gemini-2.5-flash"');
     const m = literal(a.model);
     if (m !== undefined) {
@@ -87,7 +99,13 @@ export function check(program: Stmt[]): Diagnostic[] {
         for (const n of ab.names) if (!agents.has(n) && !teams.has(n)) add(ab.line, `Agent '${a.name}' can ask '${n}', but there is no agent or team with that name.`, didYouMean(n, known()));
       }
       if (ab.kind === "tools" && !hasImports) {
-        for (const n of ab.names) if (!tools.has(n)) add(ab.line, `Agent '${a.name}' can use '${n}', but there is no tool with that name.`, didYouMean(n, tools) ?? `Define it with: tool ${n}(input):`);
+        for (const n of ab.names) {
+          if (tools.has(n) || mcpServers.has(n)) continue;
+          add(ab.line, `Agent '${a.name}' can use '${n}', but there is no tool or MCP server with that name.`, didYouMean(n, [...tools, ...mcpServers]) ?? `Define it with: tool ${n}(input): or mcp ${n}:`);
+        }
+      }
+      if (ab.kind === "search" && !hasImports) {
+        for (const n of ab.names) if (!knowledgeBases.has(n)) add(ab.line, `Agent '${a.name}' can search '${n}', but no knowledge base with that name is defined.`, `Add a line like: rag ${n} from "your-file.pdf"`);
       }
       if (ab.kind === "ask" && ab.names.includes(a.name)) add(ab.line, `Agent '${a.name}' can't ask itself.`);
     }

@@ -29,3 +29,6 @@ editors/vscode/out/
 # single-file program builds
 build/
 dist-bin/
+
+# knowledge bases are built from their sources (rebuilt when the source changes)
+examples/*.vct

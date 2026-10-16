@@ -16,6 +16,7 @@ import { Interpreter } from "../lang/interpreter.js";
 import { DEMO_SOURCE } from "../lang/demo.js";
 import { toText } from "../lang/values.js";
 import { LineReader, loadDotEnv, terminalIO } from "./io.js";
+import { choosePort, isPortFree, suggestPorts } from "./port.js";
 import { formatSource } from "../lang/format.js";
 import { audit } from "../runtime/audit.js";
 import { FileHistoryStore, HistoryStore } from "../runtime/history-store.js";
@@ -114,7 +115,21 @@ function openBrowser(url: string): void {
 }
 
 /** Start the chat/API server and block until Ctrl+C. */
-function serveUntilStopped(config: ProgramConfig, port: number, headless: boolean, autoYes: boolean, open = true, allowedOrigins: string[] = []): Promise<void> {
+/** The terminal reader of the running command, so a busy port can ask the person what to do. */
+let activeReader: LineReader | undefined;
+
+/** A port that is free to use, asking the person when the requested one is taken (and they are at a terminal). */
+async function resolveServePort(requested: number): Promise<number> {
+  if (activeReader && process.stdin.isTTY) {
+    return choosePort(requested, (prompt) => activeReader!.read(prompt), (line) => console.log(line));
+  }
+  if (await isPortFree(requested)) return requested;
+  const [a, b] = await suggestPorts(requested + 1, 2);
+  throw new Error(`Port ${requested} is already in use by another program. Use --port ${a} or --port ${b} instead.`);
+}
+
+async function serveUntilStopped(config: ProgramConfig, requestedPort: number, headless: boolean, autoYes: boolean, open = true, allowedOrigins: string[] = []): Promise<void> {
+  const port = await resolveServePort(requestedPort);
   const { close } = startServer({ program: config, port, headless, autoYes, allowedOrigins, historyStore });
   console.log(`ion: serving on http://localhost:${port}`);
   if (headless) console.log("ion: headless mode. POST {\"text\": \"...\"} to /message, or connect to /stream.");
@@ -145,6 +160,7 @@ addRunOptions(program
     if (isLegacy(source)) return runLegacy(file, source, options);
 
     const reader = new LineReader();
+    activeReader = reader;
     try {
       const interp = new Interpreter({
         io: terminalIO(reader, options.yes),
@@ -186,6 +202,7 @@ addRunOptions(program
     configureRun(file, options);
     const port = parseInt(options.port, 10);
     const reader = new LineReader();
+    activeReader = reader;
     try {
       const interp = new Interpreter({
         io: terminalIO(reader, options.yes),

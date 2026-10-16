@@ -26,7 +26,8 @@ export type Ability =
   | { kind: "shell"; line: number }
   | { kind: "gmail"; token: Secret; line: number }
   | { kind: "tools"; names: string[]; line: number }
-  | { kind: "ask"; names: string[]; line: number };
+  | { kind: "ask"; names: string[]; line: number }
+  | { kind: "search"; names: string[]; line: number };
 
 export type Stmt =
   | { k: "set"; target: Expr; value: Expr; line: number }
@@ -65,6 +66,8 @@ export type Stmt =
   | { k: "chat"; target: string; line: number }
   | { k: "serve"; target: string; port?: Expr; line: number }
   | { k: "describe"; text: string; line: number }
+  | { k: "mcp"; name: string; command?: Expr; url?: Expr; key?: Secret; line: number }
+  | { k: "rag"; name: string; source: Expr; embeddingModel?: Expr; line: number }
   | { k: "test"; name: string; body: Stmt[]; line: number }
   | { k: "assert"; e: Expr; line: number }
   | { k: "expr"; e: Expr; line: number };

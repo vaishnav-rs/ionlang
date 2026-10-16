@@ -1,6 +1,6 @@
 {
   "name": "ion",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Ion: a plain-English programming language with AI agents built in.",
   "type": "module",
   "bin": {
@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "commander": "^12.1.0",
+    "pdfjs-dist": "^4.10.38",
     "playwright": "^1.47.0",
     "vscode-languageserver": "^9.0.1",
     "vscode-languageserver-textdocument": "^1.0.15",

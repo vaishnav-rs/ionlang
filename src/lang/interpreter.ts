@@ -13,6 +13,10 @@ import { GrantKind, GrantNode } from "../parser/ast.js";
 import { runTurn } from "../runtime/agent-loop.js";
 import { audit } from "../runtime/audit.js";
 import { HistoryStore } from "../runtime/history-store.js";
+import { McpClient, McpHttpClient, McpSession } from "../runtime/mcp.js";
+import { AbilityKind, RISK_HINT, riskyCombination } from "./risk.js";
+import { currentVct, loadKnowledgeBase, searchByMeaning, searchChunks, searchToolName, VctFile } from "../runtime/rag.js";
+import { Embedder, makeEmbedder } from "../runtime/embeddings.js";
 import { GrantManager } from "../runtime/grants/grant-manager.js";
 import { ChatMessage, ToolSpec } from "../runtime/providers/types.js";
 
@@ -23,6 +27,8 @@ export interface IonIO {
   note(text: string): void;
   /** Read one line from the user; null at end of input. */
   readLine(prompt: string): Promise<string | null>;
+  /** False when there is no one to answer a question (piped input, tests). Defaults to true. */
+  interactive?: boolean;
   /** Ask permission before an agent uses a risky ability. */
   confirm(d: { agent: string; grant: GrantKind; detail: string }): Promise<boolean>;
 }
@@ -56,7 +62,14 @@ type ResolvedAbility =
   | { kind: "shell" }
   | { kind: "gmail"; token: Secret }
   | { kind: "tools"; names: string[] }
-  | { kind: "ask"; names: string[] };
+  | { kind: "ask"; names: string[] }
+  | { kind: "search"; names: string[] };
+
+/** Tools an agent gets from MCP servers and knowledge bases, worked out when the agent is defined. */
+interface ToolPlan {
+  extraTools: ToolSpec[];
+  routes: Map<string, (args: Record<string, unknown>) => Promise<string>>;
+}
 
 interface AgentSpec {
   name: string;
@@ -101,6 +114,11 @@ export class Interpreter {
   private callDepth = 0;
   private served = false;
   private tests: Extract<Stmt, { k: "test" }>[] = [];
+  /** MCP servers declared with `mcp`, the ones already running, and knowledge bases built with `rag`. */
+  private mcpServers = new Map<string, { command?: string; url?: string; bearer?: string; line: number }>();
+  private mcpClients = new Map<string, McpSession>();
+  private rags = new Map<string, { index: VctFile; embedder?: Embedder }>();
+  private toolPlans = new Map<string, ToolPlan>();
 
   constructor(private opts: InterpreterOptions) {
     installBuiltins(this.globals);
@@ -108,6 +126,23 @@ export class Interpreter {
     if (opts.historyStore) {
       for (const [key, messages] of Object.entries(opts.historyStore.load(TERMINAL_SESSION))) this.histories.set(key, messages);
     }
+  }
+
+  /** The text of a key, read from its environment variable or written in the script. */
+  private readSecret(secret: Secret | undefined, line: number): string | undefined {
+    if (!secret) return undefined;
+    if (secret.literal !== undefined) return secret.literal;
+    const value = process.env[secret.env!];
+    if (!value) {
+      throw new IonError(`The environment variable ${secret.env} isn't set.`, line, `Set it in your terminal, or put ${secret.env}=... in a .env file next to your script.`);
+    }
+    return value;
+  }
+
+  /** Stops any MCP servers this interpreter started. */
+  close(): void {
+    for (const client of this.mcpClients.values()) client.close();
+    this.mcpClients.clear();
   }
 
   /** Parse and run a whole script. */
@@ -266,7 +301,43 @@ export class Interpreter {
       case "tool":
         return this.defineTool(s, env);
       case "agent":
-        return this.defineAgent(s, env);
+        await this.defineAgent(s, env);
+        return this.prepareToolPlan(s);
+      case "mcp": {
+        const command = s.command ? toText(await this.evalExpr(s.command, env)).trim() : undefined;
+        const url = s.url ? toText(await this.evalExpr(s.url, env)).trim() : undefined;
+        if (command === "" || url === "") {
+          throw new IonError(`The MCP server '${s.name}' has an empty ${command === "" ? "command" : "url"}.`, s.line);
+        }
+        if (url !== undefined && !/^https?:\/\//.test(url)) {
+          throw new IonError(`The MCP server '${s.name}' needs a web address starting with http:// or https://.`, s.line, `Like this: url "https://example.com/mcp"`);
+        }
+        const bearer = s.key ? this.readSecret(await this.secret(s.key, env), s.line) : undefined;
+        audit.addSecret(bearer);
+        this.mcpServers.set(s.name, { command, url, bearer, line: s.line });
+        return;
+      }
+      case "rag": {
+        if (!s.name.endsWith(".vct")) {
+          throw new IonError(`A knowledge base name must end in .vct, like '${s.name.split(".")[0]}.vct'.`, s.line, `Like this: rag ${s.name.split(".")[0]}.vct from "${s.name}"`);
+        }
+        const source = toText(await this.evalExpr(s.source, env)).trim();
+        const baseDir = this.opts.file ? path.dirname(path.resolve(this.opts.file)) : process.cwd();
+        try {
+          // the setting wins; otherwise an existing file keeps its model; otherwise ask once
+          let choice: Embedder | "keep" | undefined;
+          if (s.embeddingModel) choice = makeEmbedder(toText(await this.evalExpr(s.embeddingModel, env)).trim());
+          else if (currentVct(s.name, source, baseDir)) choice = "keep";
+          else choice = await this.chooseEmbedder(s.name);
+          const { index, rebuilt, embedder } = await loadKnowledgeBase(s.name, source, baseDir, choice);
+          this.rags.set(s.name, { index, embedder });
+          const how = embedder ? `searchable by meaning with ${embedder.model}` : "keyword search";
+          this.opts.io.note(rebuilt ? `${s.name}: built from ${source} (${index.chunks.length} parts, ${how})` : `${s.name}: ready (${index.chunks.length} parts, ${how})`);
+        } catch (e) {
+          throw new IonError(e instanceof Error ? e.message : String(e), s.line);
+        }
+        return;
+      }
       case "team":
         return this.defineTeam(s, env);
       case "chat":
@@ -551,6 +622,12 @@ export class Interpreter {
 
   private async defineAgent(s: Extract<Stmt, { k: "agent" }>, env: Env): Promise<void> {
     this.declare(s.name, s.line);
+    const kinds = s.abilities.flatMap((ab): AbilityKind[] => {
+      if (ab.kind === "tools") return ab.names.filter((n) => this.mcpServers.has(n)).map((): AbilityKind => "shell");
+      return ab.kind === "files" || ab.kind === "gmail" || ab.kind === "search" || ab.kind === "web" || ab.kind === "shell" ? [ab.kind] : [];
+    });
+    const risk = riskyCombination(kinds);
+    if (risk) throw new IonError(`Agent '${s.name}': ${risk}`, s.line, RISK_HINT);
     if (!s.model) {
       throw new IonError(`Agent '${s.name}' needs a model.`, s.line, 'Add a line inside the agent, like: model "gemini/gemini-2.5-flash"');
     }
@@ -602,7 +679,7 @@ export class Interpreter {
     for (const a of s.abilities) {
       if (a.kind === "files") abilities.push({ kind: "files", path: toText(await this.evalExpr(a.path, env)) });
       else if (a.kind === "gmail") abilities.push({ kind: "gmail", token: (await this.secret(a.token, env))! });
-      else abilities.push(a.kind === "tools" || a.kind === "ask" ? { kind: a.kind, names: a.names } : { kind: a.kind });
+      else abilities.push(a.kind === "tools" || a.kind === "ask" || a.kind === "search" ? { kind: a.kind, names: a.names } : { kind: a.kind });
     }
     this.agents.set(s.name, {
       name: s.name,
@@ -700,7 +777,8 @@ export class Interpreter {
       }
     }
 
-    const toolNames = spec.abilities.flatMap((a) => (a.kind === "tools" ? a.names : []));
+    // names of MCP servers are handled by the tool plan, not here
+    const toolNames = spec.abilities.flatMap((a) => (a.kind === "tools" ? a.names : [])).filter((t) => !this.mcpServers.has(t));
     const extraTools: ToolSpec[] = toolNames.map((t) => {
       const fn = this.tools.get(t);
       if (!fn) throw new IonError(`Agent '${spec.name}' can use a tool called '${t}', but no such tool exists.`, spec.line, didYouMean(t, this.tools.keys()) ?? `Define it with: tool ${t}(input):`);
@@ -714,6 +792,9 @@ export class Interpreter {
         }
       };
     });
+
+    const plan = this.toolPlans.get(spec.name);
+    const allTools = [...extraTools, ...(plan?.extraTools ?? [])];
 
     const grants = this.grantsOf(spec);
     const infoFor = (n: string) => {
@@ -757,9 +838,11 @@ export class Interpreter {
             ? ""
             : this.resolveSecret(f.provider === spec.provider ? spec.key : undefined, spec, DEFAULT_KEY_ENV[f.provider])
       })),
-      extraTools: extraTools.length ? extraTools : undefined,
-      runExtraTool: extraTools.length
+      extraTools: allTools.length ? allTools : undefined,
+      runExtraTool: allTools.length
         ? async (toolName, args) => {
+            const route = plan?.routes.get(toolName);
+            if (route) return route(args);
             const fn = this.tools.get(toolName)!;
             const result = await this.callFunction(fn, fn.params.map((p) => args[p] ?? null), spec.line);
             return typeof result === "string" ? result : toJson(result);
@@ -768,6 +851,129 @@ export class Interpreter {
     };
     this.configs.set(name, config);
     return config;
+  }
+
+  /**
+   * Works out the MCP tools and knowledge-base search tools an agent gets. Runs when the agent is
+   * defined, because starting an MCP server is asynchronous and the config is built synchronously.
+   */
+  private async prepareToolPlan(s: Extract<Stmt, { k: "agent" }>): Promise<void> {
+    const extraTools: ToolSpec[] = [];
+    const routes = new Map<string, (args: Record<string, unknown>) => Promise<string>>();
+
+    for (const a of s.abilities) {
+      if (a.kind === "tools") {
+        for (const name of a.names) {
+          const server = this.mcpServers.get(name);
+          if (!server) continue; // a tool written with `tool`, handled when the agent is configured
+          const hasShell = s.abilities.some((x) => x.kind === "shell");
+          if (!hasShell) {
+            throw new IonError(
+              `Agent '${s.name}' can use '${name}', an MCP server. MCP servers run programs on your computer, so the agent also needs: can run commands`,
+              a.line,
+              "Add this line to the agent: can run commands"
+            );
+          }
+          const client = await this.connectMcp(name);
+          let tools;
+          try {
+            tools = await client.listTools();
+          } catch (e) {
+            throw new IonError(`I couldn't get the tools from the MCP server '${name}': ${e instanceof Error ? e.message : String(e)}`, server.line);
+          }
+          for (const tool of tools) {
+            const toolName = `${name}__${tool.name}`.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+            const schema = tool.inputSchema ?? {};
+            extraTools.push({
+              name: toolName,
+              description: tool.description ?? `The ${tool.name} tool from the ${name} server.`,
+              parameters: {
+                type: "object",
+                properties: (schema.properties ?? {}) as Record<string, { type: string; description?: string }>,
+                required: schema.required ?? []
+              }
+            });
+            routes.set(toolName, async (args) => {
+              // the first use of an MCP server needs permission, like any other risky ability
+              await this.grantManagerFor(this.configFor(s.name, a.line)).confirmOnce("shell-exec", `use the '${tool.name}' tool from the '${name}' MCP server`);
+              try {
+                return await client.callTool(tool.name, args);
+              } catch (e) {
+                throw new Error(`${e instanceof Error ? e.message : String(e)}`);
+              }
+            });
+          }
+        }
+      } else if (a.kind === "search") {
+        for (const kb of a.names) {
+          const known = this.rags.get(kb);
+          if (!known) {
+            throw new IonError(`Agent '${s.name}' can search '${kb}', but no knowledge base with that name is built above it.`, a.line, `Add a line above the agent: rag ${kb} from "your-file.pdf"`);
+          }
+          const toolName = searchToolName(kb);
+          extraTools.push({
+            name: toolName,
+            description: known.embedder
+              ? `Searches ${kb} for passages with the same meaning as a question. Returns the most relevant parts.`
+              : `Searches ${kb} for passages that contain the words of a question. Returns the most relevant parts.`,
+            parameters: {
+              type: "object",
+              properties: { query: { type: "string", description: "The question, or the words to look for" } },
+              required: ["query"]
+            }
+          });
+          routes.set(toolName, async (args) => {
+            const query = String(args.query ?? "");
+            let hits;
+            if (known.embedder) {
+              const [questionVector] = await known.embedder.embed([query], "query");
+              hits = searchByMeaning(known.index, questionVector);
+            } else {
+              hits = searchChunks(known.index, query);
+            }
+            if (hits.length === 0) return `No passages in ${kb} match that.`;
+            return hits.map((h, i) => `[${i + 1}] ${h.text}`).join("\n\n");
+          });
+        }
+      }
+    }
+    if (extraTools.length) this.toolPlans.set(s.name, { extraTools, routes });
+  }
+
+  /**
+   * Asks, once, whether a knowledge base should be searchable by meaning. Pressing Enter keeps keyword
+   * search. Without a terminal there is nobody to ask, so keyword search is used.
+   */
+  private async chooseEmbedder(kbName: string): Promise<Embedder | undefined> {
+    if (this.opts.io.interactive === false) return undefined;
+    const answer = await this.opts.io.readLine(
+      `${kbName}: search by meaning as well as by keyword? Type an embedding model, like gemini/gemini-embedding-001, or press Enter for keyword search: `
+    );
+    const text = answer?.trim() ?? "";
+    return text ? makeEmbedder(text) : undefined;
+  }
+
+  /** Starts an MCP server the first time an agent uses it, and reuses it after that. */
+  private async connectMcp(name: string): Promise<McpSession> {
+    const existing = this.mcpClients.get(name);
+    if (existing) return existing;
+    const server = this.mcpServers.get(name)!;
+    const client: McpSession = server.url
+      ? new McpHttpClient(server.url, server.url, server.bearer)
+      : new McpClient(server.command!);
+    try {
+      await client.initialize();
+    } catch (e) {
+      client.close();
+      const where = server.url ? `the web address ${server.url}` : `this command: ${server.command}`;
+      throw new IonError(
+        `I couldn't connect to the MCP server '${name}': ${e instanceof Error ? e.message : String(e)}`,
+        server.line,
+        server.url ? "Check the address opens in a browser, and that the key is right." : `Check that the command starts in a terminal (${where}).`
+      );
+    }
+    this.mcpClients.set(name, client);
+    return client;
   }
 
   private grantManagerFor(cfg: AgentConfig): GrantManager {

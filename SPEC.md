@@ -63,6 +63,7 @@ Some words are only keywords in certain places, so they are still usable as ordi
 
 - `test` starts a test block only when a text value follows it (`test "name":`).
 - `assert` is a statement only when a value follows it at the start of a line.
+- `mcp` starts a server definition only as `mcp name:`, and `rag` starts a knowledge base only as `rag name from ...`.
 - Words such as `model`, `role`, `key`, `can`, `input` and `output` are settings only inside an `agent` block.
 
 ---
@@ -322,7 +323,8 @@ An agent's name is a variable: `agent.name` gives its name.
 | `can browse web` | Fetch web pages. |
 | `can run commands` | Run shell commands. |
 | `can read gmail with token from env "NAME"` | Read a Gmail account with an access token. |
-| `can use tool_a, tool_b` | Call these tools, which are defined with `tool`. |
+| `can use tool_a, tool_b` | Call these tools, which are defined with `tool`. Also takes the name of an MCP server (see [MCP servers](#mcp-servers-mcp)). |
+| `can search knowledge.vct` | Search this knowledge base (see [Knowledge bases](#knowledge-bases-rag)). |
 | `can ask other, team` | Delegate to other agents or teams. |
 
 Abilities that touch your computer or the internet ask the person first. `ion run --yes` approves them all without asking. In `ion test`, they are denied unless `--yes` is given.
@@ -348,6 +350,65 @@ agent writer:
 - The `describe` line is shown to the agent as the tool's purpose, so write it as a plain sentence.
 
 ---
+
+### Knowledge bases (`rag`)
+
+```ion
+rag handbook.vct from "handbook.pdf"
+
+agent clerk:
+    model "mock"
+    can search handbook.vct
+```
+
+- `rag NAME from "SOURCE"` makes a knowledge base called `NAME`. The name must end in `.vct`, and it is the name agents use.
+- The source can be a PDF, a text file, or Markdown. Ion reads the text, splits it into chunks of about 800 characters, and saves them to `NAME` (here `handbook.vct`) next to the script. The `.vct` file is JSON, so you can read it.
+- The file is rebuilt only when the source changes. The run prints a note when it rebuilds.
+- A `.vct` source is loaded as it is, without chunking.
+To search by **meaning**, add an indented `embedding model "provider/model"` line under the `rag` line:
+
+```ion
+rag handbook.vct from "handbook.pdf"
+    embedding model "gemini/gemini-embedding-001"
+```
+
+- Ion then stores a vector for each chunk, and a question finds passages with the same meaning even when they share no words. `gemini/gemini-embedding-001` and `openai/text-embedding-3-small` are supported; Anthropic has no embedding models. The key comes from `GEMINI_API_KEY` or `OPENAI_API_KEY`, like agent keys. Each question is sent to the embedding service, so it costs a little.
+- With no setting, the first build asks in the terminal whether to search by meaning, and what model to use. Press Enter for keyword search. Scripts run without a terminal use keyword search and don't ask. An existing `.vct` keeps the model it was built with.
+- `can search NAME` gives the agent a tool, `search_<name>`, that takes a `query` and returns the most relevant chunks. Keyword search (BM25) finds passages that share words with the question. Meaning search finds passages that say the same thing in other words.
+- Changing the source or the embedding model rebuilds the file.
+- The knowledge base must be defined above the agent that searches it.
+
+### MCP servers (`mcp`)
+
+```ion
+mcp files:
+    command "npx -y @modelcontextprotocol/server-filesystem ./notes"
+
+agent librarian:
+    model "gemini/gemini-2.5-flash"
+    key from env "GEMINI_API_KEY"
+    can use files
+    can run commands
+```
+
+- An MCP server is a program that offers tools, using the Model Context Protocol. `mcp NAME:` with a `command` tells Ion how to start it.
+- `can use NAME` gives the agent every tool that server offers. Each tool is named `NAME__tool`, such as `files__read_text_file`.
+- The server starts the first time an agent uses it, and it is stopped when the script ends.
+- An MCP server runs a program on your computer, so an agent that uses one also needs `can run commands`. The first call asks you for permission, like any other risky ability.
+A server reached over the web takes a `url` instead of a `command`, and an optional `key from env "NAME"` that is sent as a bearer token:
+
+```ion
+mcp weather:
+    url "https://example.com/mcp"
+    key from env "WEATHER_TOKEN"
+```
+
+- Ion speaks the streamable HTTP form of MCP, including session ids and replies sent as event streams. A web server doesn't run on your computer, so it doesn't need `can run commands`.
+- The server must be defined above the agent that uses it.
+
+### Agents that read and send
+
+An agent can't both read private things (files, Gmail, a knowledge base) and send data out (browse the web, or run commands). A web page or document it reads could tell it to send your data out, so Ion refuses that combination. Split the work into two agents and put them in a team. MCP servers count as running commands.
 
 ## 8. Teams
 
@@ -504,7 +565,7 @@ Built-in functions are called like any other function. Arguments in `[brackets]`
 | `ion lsp` | Runs the language server, so editors can show errors and completions. |
 | `ion --version` | Shows the `ion` version and the language version. |
 
-Options that matter everywhere: `--yes` approves permission prompts. `--port N` sets the server port.
+Options that matter everywhere: `--yes` approves permission prompts. `--port N` sets the server port. If that port is already in use, `run` and `preview` offer two free ports nearby or let you type your own. Without a terminal they stop and name two free ports to use with `--port`.
 
 For `run` and `preview`:
 
