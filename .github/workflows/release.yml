@@ -72,7 +72,12 @@ jobs:
           mkdir -p staging
           cp "dist-bin/ion-macos-${arch/x86_64/x64}" staging/ion
           printf '%s\n' "Ion" "" "Copy the 'ion' program somewhere on your PATH, for example:" "  sudo cp ion /usr/local/bin/ion" "" "The first time you open it, macOS may say it can't verify the developer." "Right-click the file and choose Open to allow it." > staging/READ-ME-FIRST.txt
-          hdiutil create -volname "Ion" -srcfolder staging -ov -format UDZO "dist-bin/ion-macos-${arch/x86_64/x64}.dmg"
+          # hdiutil sometimes reports "Resource busy" while macOS indexes the new folder; retry
+          for attempt in 1 2 3 4; do
+            hdiutil create -volname "Ion" -srcfolder staging -ov -format UDZO "dist-bin/ion-macos-${arch/x86_64/x64}.dmg" && break
+            [ "$attempt" = 4 ] && exit 1
+            sleep 15
+          done
 
       - uses: actions/upload-artifact@v4
         with:
