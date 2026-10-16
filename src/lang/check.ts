@@ -34,7 +34,7 @@ export function check(program: Stmt[]): Diagnostic[] {
     for (const s of stmts) {
       fn(s);
       if (s.k === "if") { s.branches.forEach((b) => forEachStmt(b.body, fn)); if (s.otherwise) forEachStmt(s.otherwise, fn); }
-      else if (s.k === "repeat" || s.k === "forever" || s.k === "foreach" || s.k === "while" || s.k === "fn" || s.k === "tool") forEachStmt(s.body, fn);
+      else if (s.k === "repeat" || s.k === "forever" || s.k === "foreach" || s.k === "while" || s.k === "fn" || s.k === "tool" || s.k === "test") forEachStmt(s.body, fn);
       else if (s.k === "try") { forEachStmt(s.body, fn); forEachStmt(s.handler, fn); }
     }
   };

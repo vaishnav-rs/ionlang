@@ -6,7 +6,8 @@ export const gemini: ProviderAdapter = {
 
   async sendMessage(req: SendMessageRequest): Promise<SendMessageResult> {
     const model = req.model || gemini.defaultModel;
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${req.apiKey}`;
+    // The key travels in a header, not the URL: URLs end up in error messages and proxy logs.
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
     const systemMessages = req.messages.filter((m) => m.role === "system");
     const conversational = req.messages.filter((m) => m.role !== "system");
@@ -58,7 +59,7 @@ export const gemini: ProviderAdapter = {
 
     const res = await fetch(url, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", "x-goog-api-key": req.apiKey },
       body: JSON.stringify(body)
     });
 
@@ -86,6 +87,8 @@ export const gemini: ProviderAdapter = {
       }
     }
 
-    return { text, toolCalls };
+    const u = data.usageMetadata;
+    const usage = u ? { inputTokens: Number(u.promptTokenCount ?? 0), outputTokens: Number(u.candidatesTokenCount ?? 0) } : undefined;
+    return { text, toolCalls, usage };
   }
 };

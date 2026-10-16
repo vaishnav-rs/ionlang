@@ -2,6 +2,7 @@ import { AgentConfig, ModelTarget } from "../interpreter/program.js";
 import { resolveProvider } from "./providers/provider-table.js";
 import { ChatMessage, ToolCall, ToolSpec } from "./providers/types.js";
 import { ConfirmFn, GrantManager } from "./grants/grant-manager.js";
+import { audit } from "./audit.js";
 import { fileAccessTools, runFileAccessTool } from "./grants/file-access.js";
 import { webBrowsingTools, runWebBrowsingTool } from "./grants/web-browsing.js";
 import { shellExecTools, runShellExecTool } from "./grants/shell-exec.js";
@@ -201,6 +202,22 @@ export function resetModelCooldowns(): void {
   cooldowns.clear();
 }
 
+/** Rough token counts (about four characters per token) for providers that report none. */
+function estimateUsage(
+  messages: ChatMessage[],
+  tools: ToolSpec[],
+  text: string,
+  toolCalls: ToolCall[]
+): { inputTokens: number; outputTokens: number } {
+  const chars = (v: unknown) => JSON.stringify(v).length;
+  const inputChars = chars(messages) + chars(tools);
+  const outputChars = text.length + chars(toolCalls);
+  return { inputTokens: Math.ceil(inputChars / 4), outputTokens: Math.ceil(outputChars / 4) };
+}
+
+/** The provider's name for logs. A custom endpoint is shown as "custom", so its URL never reaches the log. */
+const providerLabel = (p: ModelTarget["provider"]) => (p.kind === "builtin" ? p.name : "custom");
+
 const targetKey = (t: ModelTarget) =>
   `${t.provider.kind === "builtin" ? t.provider.name : t.provider.endpoint}|${t.model?.modelId ?? ""}|${t.apiKey.slice(-6)}`;
 
@@ -224,16 +241,37 @@ async function sendToModel(deps: AgentLoopDeps, messages: ChatMessage[], tools: 
 
   for (let i = 0; i < order.length; i++) {
     const target = order[i];
+    audit.checkBudget();
+    const started = Date.now();
     try {
-      return await sendWithRetry(() =>
+      const result = await sendWithRetry(() =>
         resolveProvider(target.provider).sendMessage({ messages, tools, model: target.model?.modelId, apiKey: target.apiKey })
       );
+      // Some providers report no usage. Estimate from the text instead, so a budget still applies.
+      const usage = result.usage ?? estimateUsage(messages, tools, result.text, result.toolCalls);
+      audit.spend(usage);
+      audit.record(
+        "model",
+        {
+          agent: agent.name,
+          provider: providerLabel(target.provider),
+          model: target.model?.modelId ?? "default",
+          inputTokens: usage.inputTokens,
+          outputTokens: usage.outputTokens,
+          estimated: result.usage === undefined,
+          ms: Date.now() - started
+        },
+        `${agent.name} · ${providerLabel(target.provider)}/${target.model?.modelId ?? "default"} · ${Date.now() - started}ms`
+      );
+      return result;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       if (!isTransient(message)) throw err;
       cooldowns.set(targetKey(target), Date.now() + cooldownMs(message));
       if (i === order.length - 1) throw err;
-      deps.onFallback?.(agent.name, order[i + 1].model?.modelId ?? "default", message.slice(0, 120));
+      const next = order[i + 1].model?.modelId ?? "default";
+      deps.onFallback?.(agent.name, next, message.slice(0, 120));
+      audit.record("fallback", { agent: agent.name, from: target.model?.modelId ?? "default", to: next, reason: message.slice(0, 120) }, `${agent.name} · switched to ${next}`);
     }
   }
   throw new Error("no model available"); // unreachable: the loop above returns or throws
@@ -281,12 +319,22 @@ export async function runTurn(
       let toolResult: string;
       let isError = false;
       const started = Date.now();
+      audit.record(
+        "tool.call",
+        { agent: deps.agent.name, tool: call.name, args: JSON.stringify(call.arguments) },
+        `${deps.agent.name} · calls ${call.name}`
+      );
       try {
         toolResult = await executeTool(call, deps);
       } catch (err) {
         isError = true;
         toolResult = `Error: ${err instanceof Error ? err.message : String(err)}`;
       }
+      audit.record(
+        "tool.result",
+        { agent: deps.agent.name, tool: call.name, ok: !isError, ms: Date.now() - started, result: toolResult },
+        `${deps.agent.name} · ${call.name} ${isError ? "failed" : "done"} in ${Date.now() - started}ms`
+      );
       deps.onToolResult?.(deps.agent.name, call.name, toolResult, isError, Date.now() - started);
       messages.push({
         role: "tool",

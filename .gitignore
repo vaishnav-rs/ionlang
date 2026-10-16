@@ -18,3 +18,10 @@ guide/Ion-Guide.html
 digest.txt
 notes.txt
 reports/
+
+# per-project run logs and saved conversations (ion run writes these)
+.ion/
+
+# VS Code extension build output
+editors/vscode/out/
+*.vsix

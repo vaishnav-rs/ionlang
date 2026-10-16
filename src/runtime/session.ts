@@ -2,6 +2,7 @@ import { ProgramConfig } from "../interpreter/program.js";
 import { OrchestratorSession } from "./orchestrator-loop.js";
 import { ConfirmFn } from "./grants/grant-manager.js";
 import { ChunkFn, ToolCallFn, ToolResultFn } from "./agent-loop.js";
+import { HistoryStore } from "./history-store.js";
 
 /** One Session wraps one OrchestratorSession bound to whichever entry-point
  *  agent this connection/session is talking to. */
@@ -18,11 +19,12 @@ export class Session {
     autoYes: boolean,
     onChunk?: ChunkFn,
     onToolCall?: ToolCallFn,
-    onToolResult?: ToolResultFn
+    onToolResult?: ToolResultFn,
+    store?: HistoryStore
   ) {
     this.id = id;
     this.entryAgent = entryAgent;
-    this.orchestratorSession = new OrchestratorSession(program, confirmFn, autoYes, onChunk, onToolCall, onToolResult);
+    this.orchestratorSession = new OrchestratorSession(program, confirmFn, autoYes, onChunk, onToolCall, onToolResult, store, id);
   }
 
   async send(text: string, addressedTo?: string): Promise<string> {
@@ -45,9 +47,10 @@ export class SessionStore {
     autoYes: boolean,
     onChunk?: ChunkFn,
     onToolCall?: ToolCallFn,
-    onToolResult?: ToolResultFn
+    onToolResult?: ToolResultFn,
+    store?: HistoryStore
   ): Session {
-    const session = new Session(id, program, entryAgent, confirmFn, autoYes, onChunk, onToolCall, onToolResult);
+    const session = new Session(id, program, entryAgent, confirmFn, autoYes, onChunk, onToolCall, onToolResult, store);
     this.sessions.set(id, session);
     return session;
   }
@@ -64,8 +67,9 @@ export class SessionStore {
     autoYes: boolean,
     onChunk?: ChunkFn,
     onToolCall?: ToolCallFn,
-    onToolResult?: ToolResultFn
+    onToolResult?: ToolResultFn,
+    store?: HistoryStore
   ): Session {
-    return this.get(id) ?? this.create(id, program, entryAgent, confirmFn, autoYes, onChunk, onToolCall, onToolResult);
+    return this.get(id) ?? this.create(id, program, entryAgent, confirmFn, autoYes, onChunk, onToolCall, onToolResult, store);
   }
 }

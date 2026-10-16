@@ -784,15 +784,29 @@ function setConn(stateName, text) {
   $("#conn").dataset.state = stateName;
   $("#conn-text").textContent = text;
 }
+/* This browser's conversation id. The server keeps the conversation under it when it is started with persistence. */
+function sessionId() {
+  try {
+    let id = localStorage.getItem("ion-session");
+    if (!id) {
+      id = (crypto.randomUUID ? crypto.randomUUID() : `s${Date.now()}${Math.random().toString(36).slice(2)}`).replace(/[^A-Za-z0-9_-]/g, "");
+      localStorage.setItem("ion-session", id);
+    }
+    return id;
+  } catch {
+    return ""; // storage blocked: this visit is a fresh conversation
+  }
+}
 function connect() {
   setConn("connecting", state.everConnected ? "Reconnecting" : "Connecting");
   const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  const ws = new WebSocket(`${proto}//${location.host}/stream`);
+  const id = sessionId();
+  const ws = new WebSocket(`${proto}//${location.host}/stream${id ? `?session=${encodeURIComponent(id)}` : ""}`);
   state.ws = ws;
   ws.addEventListener("open", () => {
     setConn("open", "Connected");
     state.retry = 0;
-    if (state.dropped) { addDivider("Reconnected · the agents' short-term memory restarted"); state.dropped = false; }
+    if (state.dropped) { addDivider(state.persistent ? "Reconnected · your conversation is kept" : "Reconnected · the agents' short-term memory restarted"); state.dropped = false; }
     state.everConnected = true;
   });
   ws.addEventListener("close", () => {
@@ -810,6 +824,7 @@ function connect() {
     else if (msg.type === "tool_call") onToolCall(msg);
     else if (msg.type === "tool_result") onToolResult(msg);
     else if (msg.type === "confirm_required") onConfirm(msg);
+    else if (msg.type === "session") state.persistent = !!msg.persistent;
     else if (msg.type === "final") finishTurn(msg.text, { error: /^Error:/.test(msg.text) });
   });
 }

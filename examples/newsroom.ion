@@ -1,0 +1,32 @@
+# A tiny newsroom: an editor hands a story to a reporter, who can count words with a tool.
+# Runs offline with the built-in "mock" model, no API key needed:
+#   ion run examples/newsroom.ion --yes
+#   ion test examples/newsroom.ion
+
+tool word_count(text):
+    describe "Counts the words in a piece of text"
+    give back length(split(text))
+
+agent reporter:
+    model "mock"
+    role "You write short, accurate news summaries."
+    can use word_count
+
+agent editor:
+    model "mock"
+    role "You check copy and pass writing to the reporter."
+    can ask reporter
+
+team newsroom:
+    lead editor
+    members reporter
+
+set story to "Ion 1.0 ships with tests, a language server and a readable spec."
+say "Story: {story}"
+say "Words in it: {word_count(story)}"
+
+test "the story has the right word count":
+    assert word_count(story) is 12
+
+test "the reporter answers questions":
+    assert ask reporter "Is this a headline?" is "mock reply: Is this a headline?"

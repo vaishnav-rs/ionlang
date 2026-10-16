@@ -1,6 +1,7 @@
 import { AgentDefNode, GrantKind, GrantNode, Modality, ModelRef, ProviderRef } from "../parser/ast.js";
 import { ResolvedProgram } from "../semantic/semantic.js";
 import { ToolSpec } from "../runtime/providers/types.js";
+import { audit } from "../runtime/audit.js";
 
 /** One model an agent can talk to: where, which model, and the key for it. */
 export interface ModelTarget {
@@ -59,6 +60,7 @@ function buildAgentConfig(agent: AgentDefNode, all: AgentDefNode[]): AgentConfig
     throw new ProgramBuildError(`agent '${agent.name}' has no provider`);
   }
   const apiKey = resolveApiKey(agent);
+  audit.addSecret(apiKey); // keep it out of the run log and error text
   const isOrchestrator = agent.grants.some((g) => g.kind === "orchestration-powers");
   const others = isOrchestrator ? all.filter((a) => a.name !== agent.name) : [];
 

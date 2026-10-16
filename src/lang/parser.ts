@@ -17,7 +17,8 @@ const OPERATOR_WORDS = new Set([
 
 const STATEMENT_WORDS = [
   "set", "say", "add", "remove", "if", "otherwise", "repeat", "for", "while", "stop",
-  "skip", "to", "give", "try", "use", "agent", "team", "tool", "chat", "serve", "describe", "ask"
+  "skip", "to", "give", "try", "use", "agent", "team", "tool", "chat", "serve", "describe", "ask",
+  "test", "assert"
 ];
 
 const ABILITY_HELP =
@@ -233,6 +234,23 @@ class Parser {
           this.endOfLine();
           return { k: "describe", text, line: t.line };
         }
+        // 'test' and 'assert' are only keywords where they start a statement, so a
+        // variable can still be called test or assert elsewhere.
+        case "test":
+          if (this.peek(1).type === "string") {
+            this.next();
+            const name = this.stringLiteral("a test name");
+            return { k: "test", name, body: this.parseBlock("'test'"), line: t.line };
+          }
+          break;
+        case "assert":
+          if (this.startsValue(this.peek(1))) {
+            this.next();
+            const e = this.parseExpr();
+            this.endOfLine();
+            return { k: "assert", e, line: t.line };
+          }
+          break;
         case "otherwise":
         case "else":
           this.fail(`'${t.value}' has no 'if' above it.`, "'otherwise' must come right after an 'if' block.");
@@ -245,6 +263,13 @@ class Parser {
     const e = this.parseExpr();
     this.endOfLine();
     return { k: "expr", e, line: t.line };
+  }
+
+  /** True when a token could begin a value, such as `assert ok` or `assert (x)`. */
+  private startsValue(t: Tok): boolean {
+    if (t.type === "string" || t.type === "number") return true;
+    if (t.type === "word") return !OPERATOR_WORDS.has(t.value) && t.value !== "to";
+    return t.type === "op" && ["(", "[", "{", "-"].includes(t.value);
   }
 
   /** A line starting with a plain name is fine as an expression (`greet("x")`, `total * 2`).

@@ -1,0 +1,93 @@
+{
+  "name": "Ion",
+  "scopeName": "source.ion",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#constants" },
+    { "include": "#operators" },
+    { "include": "#statements" },
+    { "include": "#settings" },
+    { "include": "#names" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        { "name": "comment.line.number-sign.ion", "match": "#.*$" }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.triple.ion",
+          "begin": "\"\"\"",
+          "end": "\"\"\"",
+          "patterns": [{ "include": "#interpolation" }]
+        },
+        {
+          "name": "string.quoted.double.ion",
+          "begin": "\"",
+          "end": "\"|$",
+          "patterns": [
+            { "name": "constant.character.escape.ion", "match": "\\\\." },
+            { "include": "#interpolation" }
+          ]
+        }
+      ]
+    },
+    "interpolation": {
+      "patterns": [
+        { "name": "meta.embedded.ion", "match": "\\{[A-Za-z_][^}]*\\}" }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        { "name": "constant.numeric.ion", "match": "\\b\\d+(\\.\\d+)?\\b" }
+      ]
+    },
+    "constants": {
+      "patterns": [
+        { "name": "constant.language.ion", "match": "\\b(yes|no|true|false|nothing)\\b" }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "name": "keyword.operator.ion",
+          "match": "\\b(is|not|and|or|contains|starts|ends|with|plus|minus|times|divided|by|mod|greater|less|more|fewer|bigger|smaller|than|at|least|most|does|in)\\b"
+        },
+        { "name": "keyword.operator.symbol.ion", "match": "==|!=|<=|>=|[+\\-*/%<>=]" }
+      ]
+    },
+    "statements": {
+      "patterns": [
+        {
+          "name": "keyword.control.ion",
+          "match": "\\b(if|otherwise|else|repeat|forever|for|each|while|stop|skip|try|on|error|give|back|to|use|as|from|env|port)\\b"
+        },
+        {
+          "name": "keyword.other.ion",
+          "match": "\\b(set|say|add|remove|describe|ask|chat|serve)\\b"
+        },
+        {
+          "name": "keyword.other.definition.ion",
+          "match": "\\b(agent|team|tool|test|assert)\\b"
+        }
+      ]
+    },
+    "settings": {
+      "patterns": [
+        {
+          "name": "support.type.property-name.ion",
+          "match": "\\b(model|role|instructions|key|apikey|fallback|endpoint|format|auth|header|can|remembers|forgets|input|output|lead|members|access|browse|run|commands|files|gmail|token|read|write|text|voice|openai|anthropic|raw)\\b"
+        }
+      ]
+    },
+    "names": {
+      "patterns": [
+        { "name": "variable.other.ion", "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b" }
+      ]
+    }
+  }
+}

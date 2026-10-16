@@ -89,7 +89,9 @@ export function makeAnthropicCompatible(o: AnthropicCompatOptions): ProviderAdap
         }
       }
 
-      return { text, toolCalls };
+      const u = data.usage;
+      const usage = u ? { inputTokens: Number(u.input_tokens ?? 0), outputTokens: Number(u.output_tokens ?? 0) } : undefined;
+      return { text, toolCalls, usage };
     }
   };
 }

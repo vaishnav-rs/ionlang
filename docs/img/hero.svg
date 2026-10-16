@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="460" viewBox="0 0 1200 460" role="img" aria-label="Ion: programming in plain English, with AI agents built in">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0b1020"/>
+      <stop offset="1" stop-color="#1b1640"/>
+    </linearGradient>
+    <linearGradient id="title" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#7dd3fc"/>
+      <stop offset="0.5" stop-color="#a78bfa"/>
+      <stop offset="1" stop-color="#f0abfc"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#a78bfa" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#a78bfa" stop-opacity="0"/>
+    </radialGradient>
+    <style>
+      .mono { font-family: Consolas, "SFMono-Regular", Menlo, monospace; }
+      .k { fill: #f0abfc; }
+      .s { fill: #86efac; }
+      .c { fill: #64748b; }
+      .p { fill: #e2e8f0; }
+      .cursor { animation: blink 1.1s steps(1) infinite; }
+      @keyframes blink { 50% { opacity: 0; } }
+      .rise { animation: rise 0.9s ease-out both; }
+      .rise2 { animation: rise 0.9s 0.25s ease-out both; }
+      .rise3 { animation: rise 0.9s 0.5s ease-out both; }
+      @keyframes rise { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+    </style>
+  </defs>
+
+  <rect width="1200" height="460" rx="28" fill="url(#bg)"/>
+  <circle cx="930" cy="230" r="330" fill="url(#glow)"/>
+  <circle cx="90" cy="60" r="180" fill="url(#glow)" opacity="0.6"/>
+
+  <g class="rise">
+    <text x="70" y="170" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="128" font-weight="800" fill="url(#title)">Ion</text>
+    <text x="74" y="228" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="32" fill="#e2e8f0">Programming in plain English.</text>
+    <text x="74" y="270" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="32" fill="#e2e8f0">AI agents built in.</text>
+  </g>
+
+  <g class="rise2">
+    <text x="74" y="340" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="20" fill="#94a3b8">Write what you want the way you'd say it. Ion runs it,</text>
+    <text x="74" y="368" font-family="Segoe UI, Helvetica, Arial, sans-serif" font-size="20" fill="#94a3b8">including the AI agents, tools and teams that do the work.</text>
+  </g>
+
+  <g class="rise3">
+    <rect x="640" y="70" width="500" height="320" rx="18" fill="#0f172a" stroke="#334155" stroke-width="1.5"/>
+    <circle cx="668" cy="96" r="7" fill="#f87171"/>
+    <circle cx="690" cy="96" r="7" fill="#fbbf24"/>
+    <circle cx="712" cy="96" r="7" fill="#4ade80"/>
+    <g class="mono" font-size="19">
+      <text x="672" y="150"><tspan class="k">agent</tspan><tspan class="p"> writer:</tspan></text>
+      <text x="672" y="180"><tspan class="p">    model </tspan><tspan class="s">"gemini/gemini-2.5-flash"</tspan></text>
+      <text x="672" y="210"><tspan class="p">    role </tspan><tspan class="s">"You write short news."</tspan></text>
+      <text x="672" y="240"><tspan class="p">    </tspan><tspan class="k">can</tspan><tspan class="p"> access files </tspan><tspan class="k">in</tspan><tspan class="s"> "./notes"</tspan></text>
+      <text x="672" y="290"><tspan class="k">team</tspan><tspan class="p"> newsroom:</tspan></text>
+      <text x="672" y="320"><tspan class="p">    </tspan><tspan class="k">lead</tspan><tspan class="p"> writer</tspan></text>
+      <text x="672" y="350"><tspan class="p">    </tspan><tspan class="k">members</tspan><tspan class="p"> editor, researcher</tspan><tspan class="cursor p">▍</tspan></text>
+    </g>
+  </g>
+</svg>

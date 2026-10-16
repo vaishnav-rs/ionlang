@@ -1,0 +1,61 @@
+{
+  "name": "ion-language",
+  "displayName": "Ion",
+  "description": "Ion, the plain-English language for AI agents: highlighting, errors as you type, and completions.",
+  "version": "0.1.0",
+  "publisher": "ion-lang",
+  "engines": {
+    "vscode": "^1.80.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "main": "./out/extension.js",
+  "activationEvents": [
+    "onLanguage:ion"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "ion",
+        "aliases": [
+          "Ion",
+          "ion"
+        ],
+        "extensions": [
+          ".ion"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "ion",
+        "scopeName": "source.ion",
+        "path": "./syntaxes/ion.tmLanguage.json"
+      }
+    ],
+    "configuration": {
+      "title": "Ion",
+      "properties": {
+        "ion.serverCommand": {
+          "type": "string",
+          "default": "ion",
+          "description": "The command that starts Ion's language server (it runs 'ion lsp'). Use a full path if 'ion' is not on your PATH."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ."
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "1.80.0",
+    "typescript": "^5.6.0"
+  },
+  "license": "Apache-2.0"
+}

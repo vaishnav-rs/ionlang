@@ -1,5 +1,7 @@
 # Ion — Build Plan
 
+> **Historical.** This is the original build spec for the declarative `ion init` syntax, kept for reference. It no longer describes the language. For the current language, see [SPEC.md](SPEC.md). Old `ion init` files still run.
+
 Ion is an English-like, declarative language for defining AI agents and agent teams. An `.ion` file declares each agent's provider, model, and grants (capabilities); running the file starts a persistent local service — a bundled web chat UI (text and/or voice), a WebSocket/REST API for embedding into another frontend, or a headless API-only mode — that a human or another program interacts with continuously. This document is the complete build spec and is the single source of truth for building Ion end to end.
 
 Decisions locked in for this build:

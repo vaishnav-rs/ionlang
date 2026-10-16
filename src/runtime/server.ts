@@ -6,6 +6,7 @@ import { randomUUID } from "node:crypto";
 import { WebSocketServer, WebSocket } from "ws";
 import { ProgramConfig } from "../interpreter/program.js";
 import { SessionStore } from "./session.js";
+import { HistoryStore, isValidSessionId } from "./history-store.js";
 import { GrantKind } from "../parser/ast.js";
 import { closeAllBrowsers } from "./grants/web-browsing.js";
 
@@ -19,6 +20,8 @@ export interface ServerOptions {
   autoYes: boolean;
   /** Extra browser origins (like "http://localhost:5173") allowed to call the API. */
   allowedOrigins?: string[];
+  /** Keep conversations between runs. Without it, conversations live only in memory. */
+  historyStore?: HistoryStore;
 }
 
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
@@ -123,8 +126,10 @@ export function startServer(opts: ServerOptions): { httpServer: http.Server; clo
       hostAllowed(info.req.headers.host) && originAllowed(info.origin || undefined, opts.port, opts.allowedOrigins)
   });
 
-  wss.on("connection", (ws) => {
-    const sessionId = randomUUID();
+  wss.on("connection", (ws, req) => {
+    // A page can name its conversation with ?session=<id>, which lets it resume after a reload
+    const requested = new URL(req.url ?? "/", "http://localhost").searchParams.get("session");
+    const sessionId = requested && isValidSessionId(requested) ? requested : randomUUID();
     const entryAgent = opts.program.entryPoints[0];
     if (!entryAgent) {
       ws.send(JSON.stringify({ type: "final", text: "No entry-point agent configured." }));
@@ -169,8 +174,11 @@ export function startServer(opts: ServerOptions): { httpServer: http.Server; clo
             result: result.length > 4000 ? `${result.slice(0, 4000)}
 … (${result.length - 4000} more characters)` : result
           })
-        )
+        ),
+      opts.historyStore
     );
+
+    ws.send(JSON.stringify({ type: "session", persistent: !!opts.historyStore }));
 
     ws.on("message", async (raw) => {
       let msg: any;
@@ -252,7 +260,14 @@ async function handleRestMessage(
   req.on("end", async () => {
     try {
       const parsed = JSON.parse(body || "{}");
-      const sessionId = String(parsed.session_id ?? "rest-default");
+      // Each call without a session_id is a fresh conversation, so unrelated callers never share memory
+      const requested = parsed.session_id === undefined ? undefined : String(parsed.session_id);
+      if (requested !== undefined && !isValidSessionId(requested)) {
+        res.writeHead(400, { "Content-Type": "application/json" });
+        res.end(JSON.stringify({ error: "session_id may only use letters, digits, '-' and '_' (up to 128 characters)" }));
+        return;
+      }
+      const sessionId = requested ?? randomUUID();
       const entryAgent = opts.program.entryPoints[0];
       if (!entryAgent) {
         res.writeHead(500, { "Content-Type": "application/json" });
@@ -267,7 +282,7 @@ async function handleRestMessage(
         return opts.autoYes;
       };
 
-      const session = sessions.getOrCreate(sessionId, opts.program, entryAgent, confirmFn, opts.autoYes);
+      const session = sessions.getOrCreate(sessionId, opts.program, entryAgent, confirmFn, opts.autoYes, undefined, undefined, undefined, opts.historyStore);
       const result = await session.send(String(parsed.text ?? ""));
       res.writeHead(200, { "Content-Type": "application/json" });
       res.end(JSON.stringify({ result }));

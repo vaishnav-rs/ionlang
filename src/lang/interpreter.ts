@@ -11,6 +11,8 @@ import {
 import { AgentConfig, ProgramConfig } from "../interpreter/program.js";
 import { GrantKind, GrantNode } from "../parser/ast.js";
 import { runTurn } from "../runtime/agent-loop.js";
+import { audit } from "../runtime/audit.js";
+import { HistoryStore } from "../runtime/history-store.js";
 import { GrantManager } from "../runtime/grants/grant-manager.js";
 import { ChatMessage, ToolSpec } from "../runtime/providers/types.js";
 
@@ -32,6 +34,19 @@ export interface InterpreterOptions {
   autoYes?: boolean;
   /** Start the web/API server for `serve`. Resolves when the server is stopped. */
   serve?: (program: ProgramConfig, port: number) => Promise<void>;
+  /** Set by `ion test`: `test` blocks are collected to run later instead of being skipped. */
+  collectTests?: boolean;
+  /** Keep `ask` conversations between runs (see `ion run --data`). */
+  historyStore?: HistoryStore;
+}
+
+export interface TestResult {
+  name: string;
+  ok: boolean;
+  /** Why it failed, when it did. */
+  message?: string;
+  line?: number;
+  hint?: string;
 }
 
 type Secret = { env?: string; literal?: string };
@@ -59,6 +74,9 @@ interface AgentSpec {
 }
 interface TeamSpec { name: string; lead: string; members: string[]; line: number }
 
+/** The key under which `ask` conversations are saved when a history store is given. */
+const TERMINAL_SESSION = "terminal";
+
 const PROVIDERS = ["gemini", "openai", "anthropic", "openrouter", "groq", "cerebras", "custom", "mock", "demo"];
 const DEFAULT_KEY_ENV: Record<string, string> = {
   gemini: "GEMINI_API_KEY", openai: "OPENAI_API_KEY", anthropic: "ANTHROPIC_API_KEY",
@@ -82,15 +100,39 @@ export class Interpreter {
   private fileStack: string[] = [];
   private callDepth = 0;
   private served = false;
+  private tests: Extract<Stmt, { k: "test" }>[] = [];
 
   constructor(private opts: InterpreterOptions) {
     installBuiltins(this.globals);
     if (opts.file) this.fileStack.push(path.resolve(opts.file));
+    if (opts.historyStore) {
+      for (const [key, messages] of Object.entries(opts.historyStore.load(TERMINAL_SESSION))) this.histories.set(key, messages);
+    }
   }
 
   /** Parse and run a whole script. */
   async runSource(source: string): Promise<void> {
     await this.run(parse(source));
+  }
+
+  /**
+   * Run a script's top level (definitions and setup), then each `test` block in order.
+   * Tests share the script's variables, the same way the rest of the file does.
+   * A failing `assert` or any other error fails only that test.
+   */
+  async runTests(source: string): Promise<TestResult[]> {
+    await this.run(parse(source));
+    const results: TestResult[] = [];
+    for (const t of this.tests) {
+      try {
+        await this.execBlock(t.body, this.globals);
+        results.push({ name: t.name, ok: true });
+      } catch (e) {
+        if (e instanceof IonError) results.push({ name: t.name, ok: false, message: e.message, line: e.line, hint: e.hint });
+        else results.push({ name: t.name, ok: false, message: e instanceof Error ? e.message : String(e), line: t.line });
+      }
+    }
+    return results;
   }
 
   /** For the REPL: run a snippet, returning the value if it was a single expression. */
@@ -228,12 +270,35 @@ export class Interpreter {
       case "team":
         return this.defineTeam(s, env);
       case "chat":
+        if (this.opts.collectTests) throw new IonError("'chat' doesn't run inside 'ion test'.", s.line, "Test the agent with 'ask' instead.");
         return this.chat(s.target, s.line, env);
       case "serve":
+        if (this.opts.collectTests) throw new IonError("'serve' doesn't run inside 'ion test'.", s.line, "Put 'serve' in the main script, not in a test.");
         return this.serve(s.target, s.port ? await this.evalExpr(s.port, env) : 4310, s.line, env);
+      case "test":
+        if (this.opts.collectTests) this.tests.push(s);
+        return;
+      case "assert":
+        return this.assertTrue(s.e, s.line, env);
       case "expr":
         await this.evalExpr(s.e, env);
         return;
+    }
+  }
+
+  /** `assert <condition>`. For `assert a is b` the message shows both values. */
+  private async assertTrue(e: Expr, line: number, env: Env): Promise<void> {
+    const show = (v: unknown) => (typeof v === "string" ? JSON.stringify(v) : toText(v));
+    if (e.k === "bin" && e.op === "==") {
+      const left = await this.evalExpr(e.l, env);
+      const right = await this.evalExpr(e.r, env);
+      if (!isEqual(left, right)) {
+        throw new IonError(`I expected ${show(right)}, but it was ${show(left)}.`, line);
+      }
+      return;
+    }
+    if (!truthy(await this.evalExpr(e, env))) {
+      throw new IonError("This check is not true.", line, "Check the values it depends on, or use 'say' to print them.");
     }
   }
 
@@ -585,6 +650,12 @@ export class Interpreter {
   }
 
   private resolveSecret(s: Secret | undefined, spec: AgentSpec, fallbackEnv: string | undefined): string {
+    const secret = this.findSecret(s, spec, fallbackEnv);
+    audit.addSecret(secret); // keep it out of the log, traces and error text from now on
+    return secret;
+  }
+
+  private findSecret(s: Secret | undefined, spec: AgentSpec, fallbackEnv: string | undefined): string {
     if (s?.literal !== undefined) return s.literal;
     const name = s?.env ?? fallbackEnv;
     if (!name) throw new IonError(`Agent '${spec.name}' needs a secret but none was given.`, spec.line);
@@ -717,6 +788,7 @@ export class Interpreter {
     const key = `${session}|${name}`;
     const remembers = cfg.memory !== false;
     const history = remembers ? this.histories.get(key) ?? [] : [];
+    audit.record("message", { agent: name, role: "user", text: prompt }, `${name} · message in`);
     try {
       const { finalText, history: updated } = await runTurn(history, prompt, {
         agent: cfg,
@@ -725,9 +797,14 @@ export class Interpreter {
         onFallback: (agent, model, reason) => this.opts.io.note(`${agent}: main model unavailable, switching to ${model} (${reason})`),
         delegate: cfg.isOrchestrator ? (n, task) => this.askNamed(n, task, line, session, depth + 1) : undefined
       });
-      if (remembers) this.histories.set(key, updated);
+      if (remembers) {
+        this.histories.set(key, updated);
+        this.opts.historyStore?.save(TERMINAL_SESSION, Object.fromEntries(this.histories));
+      }
+      audit.record("message", { agent: name, role: "assistant", text: finalText }, `${name} · replied`);
       return finalText;
     } catch (e) {
+      audit.record("error", { agent: name, message: e instanceof Error ? e.message : String(e) }, `${name} · error`);
       if (e instanceof IonError) throw e;
       throw new IonError(`Asking '${name}' failed: ${e instanceof Error ? e.message : String(e)}`, line);
     }

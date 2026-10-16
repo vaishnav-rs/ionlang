@@ -74,7 +74,9 @@ export function makeOpenAICompatible(o: OpenAICompatOptions): ProviderAdapter {
         arguments: safeParseJson(tc.function.arguments)
       }));
 
-      return { text: message.content ?? "", toolCalls };
+      const u = data.usage;
+      const usage = u ? { inputTokens: Number(u.prompt_tokens ?? 0), outputTokens: Number(u.completion_tokens ?? 0) } : undefined;
+      return { text: message.content ?? "", toolCalls, usage };
     }
   };
   return adapter;

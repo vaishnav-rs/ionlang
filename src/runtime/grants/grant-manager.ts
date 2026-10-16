@@ -1,4 +1,5 @@
 import { GrantKind, GrantNode } from "../../parser/ast.js";
+import { audit } from "../audit.js";
 
 export type ConfirmFn = (detail: {
   agent: string;
@@ -46,8 +47,12 @@ export class GrantManager {
    *  --yes auto-approval); subsequent uses of the same grant proceed silently. */
   async confirmOnce(kind: GrantKind, detail: string): Promise<void> {
     this.assert(kind);
-    if (this.autoYes || this.confirmedOnce.has(kind)) return;
+    if (this.autoYes || this.confirmedOnce.has(kind)) {
+      audit.record("grant", { agent: this.agentName, grant: kind, decision: this.autoYes ? "auto-approved" : "already approved", detail }, `${this.agentName} · ${kind} · ${this.autoYes ? "auto-approved" : "already approved"}`);
+      return;
+    }
     const ok = await this.confirmFn({ agent: this.agentName, grant: kind, detail });
+    audit.record("grant", { agent: this.agentName, grant: kind, decision: ok ? "approved" : "denied", detail }, `${this.agentName} · ${kind} · ${ok ? "approved" : "denied"}`);
     if (!ok) {
       throw new GrantDeniedError(`agent '${this.agentName}': use of grant '${kind}' was denied`);
     }

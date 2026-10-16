@@ -65,4 +65,6 @@ export type Stmt =
   | { k: "chat"; target: string; line: number }
   | { k: "serve"; target: string; port?: Expr; line: number }
   | { k: "describe"; text: string; line: number }
+  | { k: "test"; name: string; body: Stmt[]; line: number }
+  | { k: "assert"; e: Expr; line: number }
   | { k: "expr"; e: Expr; line: number };

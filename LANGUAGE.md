@@ -282,6 +282,18 @@ script.ion:2: I don't know anything called 'totl'.
 
 `ion check` also catches unknown agents, tools, models and teams before anything runs, and costs nothing because it never calls an AI.
 
+## Testing your script
+
+```
+to double(n):
+    give back n times 2
+
+test "doubling works":
+    assert double(4) is 8
+```
+
+Run `ion test script.ion`. A failing check tells you what you expected and what you got. Tests use `model "mock"` so they never call a real AI. Test blocks are ignored by `ion run`.
+
 ---
 
 ## Cheat sheet
@@ -297,6 +309,7 @@ agent a: model/role/key/can/remembers/forgets/input/output
 tool t(a):  describe "..."      team t: lead a / members b, c
 ask a "prompt"    ask user "prompt"    chat with a    serve a on port N
 use "file.ion"
+test "name":  assert x is 5          ion test script.ion    ion fmt script.ion
 ```
 
 Old files that start with `ion init` still run exactly as before.

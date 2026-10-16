@@ -34,6 +34,8 @@ export interface SendMessageRequest {
 export interface SendMessageResult {
   text: string;
   toolCalls: ToolCall[];
+  /** Tokens the provider billed for this call, when it reports them. */
+  usage?: { inputTokens: number; outputTokens: number };
 }
 
 export interface ProviderAdapter {
