@@ -83,6 +83,9 @@ jobs:
       - name: Package (macOS)
         if: runner.os == 'macOS'
         run: |
+          # the runner's disk fills up during the build; the disk image only needs the program
+          rm -rf node_modules build
+          df -h / | tail -1
           arch=$(uname -m)
           mkdir -p staging
           cp "dist-bin/ion-macos-${arch/x86_64/x64}" staging/ion
