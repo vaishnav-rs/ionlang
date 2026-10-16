@@ -1,0 +1,99 @@
+name: Release
+
+# Builds Ion as a program for each system and attaches them to a GitHub release.
+# Push a version tag to start it:   git tag v0.1.0 && git push origin v0.1.0
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+          - os: macos-latest      # Apple Silicon
+          - os: macos-13          # Intel
+          - os: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+
+      # builds the program and runs its smoke test (version, chat page served from inside it)
+      - run: npm run build:binary
+
+      - name: Package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: Compress-Archive -Path dist-bin/ion-windows-x64.exe -DestinationPath dist-bin/ion-windows-x64.zip
+
+      - name: Package (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          version=$(node -p "require('./package.json').version")
+          # a .deb installs with apt on Ubuntu and Debian: `sudo apt install ./ion_<version>_amd64.deb`
+          root=deb/ion_${version}_amd64
+          mkdir -p "$root/DEBIAN" "$root/usr/local/bin"
+          cp dist-bin/ion-linux-x64 "$root/usr/local/bin/ion"
+          chmod 755 "$root/usr/local/bin/ion"
+          printf '%s\n' \
+            "Package: ion" \
+            "Version: ${version}" \
+            "Section: devel" \
+            "Priority: optional" \
+            "Architecture: amd64" \
+            "Maintainer: Vaishnav S" \
+            "Homepage: https://github.com/vaishnav-rs/ionlang" \
+            "Description: Ion, the plain-English language for AI agents" \
+            " Write programs in plain English, with AI agents, tools and teams built in." \
+            > "$root/DEBIAN/control"
+          dpkg-deb --build --root-owner-group "$root" "dist-bin/ion_${version}_amd64.deb"
+          # a plain archive too, for any Linux
+          mkdir -p staging && cp dist-bin/ion-linux-x64 staging/ion
+          tar -czf dist-bin/ion-linux-x64.tar.gz -C staging ion
+
+      - name: Package (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          arch=$(uname -m)
+          mkdir -p staging
+          cp "dist-bin/ion-macos-${arch/x86_64/x64}" staging/ion
+          printf '%s\n' "Ion" "" "Copy the 'ion' program somewhere on your PATH, for example:" "  sudo cp ion /usr/local/bin/ion" "" "The first time you open it, macOS may say it can't verify the developer." "Right-click the file and choose Open to allow it." > staging/READ-ME-FIRST.txt
+          hdiutil create -volname "Ion" -srcfolder staging -ov -format UDZO "dist-bin/ion-macos-${arch/x86_64/x64}.dmg"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ion-${{ runner.os }}-${{ runner.arch }}
+          path: |
+            dist-bin/*.zip
+            dist-bin/*.tar.gz
+            dist-bin/*.deb
+            dist-bin/*.dmg
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: downloads
+          merge-multiple: true
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" downloads/* --title "Ion $GITHUB_REF_NAME" --generate-notes

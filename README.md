@@ -82,7 +82,17 @@ Done: TOOLS ARE FUNCTIONS AGENTS CAN CALL!
 
 ## 📦 Install
 
-You need [Node.js](https://nodejs.org) 20 or newer.
+**Easiest: download the program for your system** from the [Releases page](https://github.com/vaishnav-rs/ionlang/releases). No Node.js needed.
+
+| System | Download | Then |
+|---|---|---|
+| Windows | `ion-windows-x64.zip` | Unzip it, and put `ion.exe` somewhere on your PATH |
+| macOS (Apple Silicon or Intel) | `ion-macos-arm64.dmg` or `ion-macos-x64.dmg` | Open it, and copy `ion` to `/usr/local/bin` |
+| Linux | `ion-linux-x64.tar.gz` | Extract it, and move `ion` to `/usr/local/bin` |
+
+Then open a new terminal and check it works: `ion --version`.
+
+**Building from source** needs [Node.js](https://nodejs.org) 20 or newer.
 
 **Windows (PowerShell):**
 

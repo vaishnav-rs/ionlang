@@ -13,6 +13,15 @@ import { closeAllBrowsers } from "./grants/web-browsing.js";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const WEBUI_DIR = path.join(__dirname, "webui");
 
+/** Set by the single-file build (scripts/build-binary.mjs): chat page files, base64 encoded, by URL path. */
+declare const __ION_WEBUI__: Record<string, string> | undefined;
+
+function embeddedWebAsset(urlPath: string): Buffer | undefined {
+  if (typeof __ION_WEBUI__ === "undefined" || !__ION_WEBUI__) return undefined;
+  const encoded = __ION_WEBUI__[urlPath];
+  return encoded === undefined ? undefined : Buffer.from(encoded, "base64");
+}
+
 export interface ServerOptions {
   program: ProgramConfig;
   port: number;
@@ -237,14 +246,21 @@ function handleStaticRequest(req: http.IncomingMessage, res: http.ServerResponse
     res.end();
     return;
   }
+  const contentType = MIME[path.extname(filePath)] ?? "application/octet-stream";
+  // the single-file program carries its chat page inside it
+  const embedded = embeddedWebAsset(urlPath);
+  if (embedded) {
+    res.writeHead(200, { "Content-Type": contentType });
+    res.end(embedded);
+    return;
+  }
   fs.readFile(filePath, (err, data) => {
     if (err) {
       res.writeHead(404);
       res.end("Not found");
       return;
     }
-    const ext = path.extname(filePath);
-    res.writeHead(200, { "Content-Type": MIME[ext] ?? "application/octet-stream" });
+    res.writeHead(200, { "Content-Type": contentType });
     res.end(data);
   });
 }

@@ -25,3 +25,7 @@ reports/
 # VS Code extension build output
 editors/vscode/out/
 *.vsix
+
+# single-file program builds
+build/
+dist-bin/

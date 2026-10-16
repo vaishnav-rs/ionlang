@@ -29,7 +29,11 @@ program
   .version(`${packageVersion()} (Ion language ${LANGUAGE_VERSION})`, "-v, --version", "show the ion and language versions");
 
 /** The `ion` package version from package.json, which sits two folders above both src/cli and dist/cli. */
+/** Set by the single-file build; there is no package.json next to that program, so the version is baked in. */
+declare const __ION_VERSION__: string | undefined;
+
 function packageVersion(): string {
+  if (typeof __ION_VERSION__ === "string") return __ION_VERSION__;
   try {
     const here = path.dirname(fileURLToPath(import.meta.url));
     const pkg = JSON.parse(fs.readFileSync(path.join(here, "..", "..", "package.json"), "utf-8")) as { version: string };
